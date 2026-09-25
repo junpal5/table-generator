@@ -200,6 +200,7 @@
           <td class="vars">${esc(vars)}</td>
           <td><input type="text" class="title" value="${esc(it.title)}"></td>
           <td><select class="kind${it.kind !== it.autoKind ? ' changed' : ''}">${opts}</select></td>
+          <td class="sort">${TG.canSort(it) ? `<input type="checkbox" class="srt"${it.sort ? ' checked' : ''} aria-label="큰 순 정렬">` : '<span class="na" title="수치·척도 문항은 보기 순서를 유지합니다">–</span>'}</td>
           <td class="reason">${esc(it.reason)}</td>
           <td class="labels" title="${esc(itemDetail(it))}">${esc(truncate(itemDetail(it), 70))}</td>
         </tr>`;
@@ -230,6 +231,8 @@
       if (e.target.classList.contains('inc')) {
         it.include = e.target.checked;
         tr.classList.toggle('off', !it.include);
+      } else if (e.target.classList.contains('srt')) {
+        it.sort = e.target.checked;
       } else if (e.target.classList.contains('kind')) {
         it.kind = e.target.value;
         e.target.classList.toggle('changed', it.kind !== it.autoKind);
@@ -240,6 +243,9 @@
         }
         tr.querySelector('.inc').checked = it.include;
         tr.classList.toggle('off', !it.include);
+        tr.querySelector('td.sort').innerHTML = TG.canSort(it)
+          ? `<input type="checkbox" class="srt"${it.sort ? ' checked' : ''} aria-label="큰 순 정렬">`
+          : '<span class="na" title="수치·척도 문항은 보기 순서를 유지합니다">–</span>';
         renderOptions();
       }
       updateSummary();
@@ -250,6 +256,15 @@
     });
     $('checkAll').addEventListener('click', () => setAll(true));
     $('uncheckAll').addEventListener('click', () => setAll(false));
+    $('sortAll').addEventListener('click', () => setSortAll(true));
+    $('unsortAll').addEventListener('click', () => setSortAll(false));
+  }
+
+  function setSortAll(on) {
+    state.items.forEach((it) => {
+      if (TG.canSort(it)) it.sort = on;
+    });
+    renderItems();
   }
 
   function setAll(on) {
