@@ -314,6 +314,26 @@
     MSG: 'exclude',
   };
 
+  // "단수응답형 (SIG)" 같은 약어와 "단순응답형(Single Answer)" 같은 전체 이름 모두 읽기
+  function gcaiiQtype(raw) {
+    const s = str(raw);
+    const abbr = /\(([A-Z0-9]{2,4})\)\s*$/.exec(s);
+    if (abbr && abbr[1] in GCAII_QTYPE) return abbr[1];
+    if (/메시지|message/i.test(s)) return 'MSG';
+    if (/순위|rank/i.test(s)) return 'RNK';
+    if (/멀티|matrix\s*-?\s*multi\b.*level/i.test(s)) return 'MX7';
+    if (/척도형?-?\s*복수|matrix\s*-\s*multi/i.test(s)) return 'MX3';
+    if (/척도|matrix/i.test(s)) return 'MX1';
+    if (/복수|multi/i.test(s)) return 'MTP';
+    if (/전화|phone/i.test(s)) return 'TEL'; // "Phone Number"가 숫자형으로 잡히지 않도록 먼저 확인
+    if (/이메일|e-?mail/i.test(s)) return 'EML';
+    if (/쌍숫자/.test(s)) return 'NUD';
+    if (/숫자|numeric|number/i.test(s)) return 'NUM';
+    if (/자기기입|주관|open|text/i.test(s)) return 'OPN';
+    if (/단수|단순|단일|single/i.test(s)) return 'SIG';
+    return '';
+  }
+
   function gcaiiParse(sheets) {
     const vars = new Map();
     const order = [];
@@ -336,33 +356,58 @@
       const ci = { id: headerIndex(h, /^문항\s*ID$/i), type: headerIndex(h, /^문항\s*타입$/), text: headerIndex(h, /^보기$/) };
       if (ci.text < 0) ci.text = 2;
       let cur = null;
+      let pending = null; // "1. " 처럼 이름이 비어 있는 보기 → 다음 줄의 글자가 보기 이름
       rows.slice(1).forEach((r) => {
         if (!r) return;
         const text = cleanText(r[ci.text]);
         if (str(r[ci.id])) {
-          const m = /^\s*([A-Za-z]+[0-9A-Za-z-]*)\]\s*([\s\S]*)$/.exec(text);
-          const t = /\(([A-Z0-9]+)\)\s*$/.exec(str(r[ci.type]));
+          // 질문번호: "SQ1]", "B5-1]", "1]", "12-1]", "개인정보동의]"
+          const m = /^\s*([^\]\s]{1,20})\]\s*([\s\S]*)$/.exec(text);
           cur = null;
+          pending = null;
           if (!m) return;
-          cur = { code: m[1], base: m[1].replace(/-/g, 'K').toUpperCase(), text: m[2].trim(), qtype: t ? t[1] : '', rows: [], codes: [] };
+          cur = { code: m[1], base: m[1].replace(/-/g, 'K').toUpperCase(), text: m[2].trim(), qtype: gcaiiQtype(r[ci.type]), rows: [], codes: [] };
           questions.push(cur);
           return;
         }
-        if (!cur) return;
+        if (!cur || !text) return;
         let m = /^(\d+)\](.+)$/.exec(text);
         if (m) {
           cur.rows.push({ n: Number(m[1]), label: m[2].trim() });
           return;
         }
         m = /^(-?\d+)\.(.*)$/.exec(text);
-        if (m) cur.codes.push({ code: Number(m[1]), label: m[2].trim() });
+        if (m) {
+          const c = { code: Number(m[1]), label: m[2].trim() };
+          cur.codes.push(c);
+          pending = c.label ? null : c;
+          return;
+        }
+        if (pending && !/^-?\d+$/.test(text)) {
+          pending.label = text;
+          pending = null;
+        }
       });
     }
     // 긴 질문번호부터 맞춰 봄 (B5K1 이 B5 보다 먼저)
     const byLen = questions.slice().sort((a, b) => b.base.length - a.base.length);
+    // 질문번호에 쓰인 영문 머리(SQ, A, B …) — 이것과 다른 머리는 데이터 쪽 접두어(Y1, Q1 …)로 보고 떼어 냄
+    const heads = new Set(questions.map((q) => (/^([A-Z]+)\d/.exec(q.base) || [])[1]).filter(Boolean));
+    const fits = (up, base) => up.startsWith(base) && (up.length === base.length || !/\d/.test(up[base.length]));
+    const matchQuestion = (name) => {
+      const up = str(name).toUpperCase();
+      let q = byLen.find((x) => fits(up, x.base));
+      if (q) return { q, rest: up.slice(q.base.length) };
+      const pm = /^([A-Z]{1,3})(\d.*)$/.exec(up);
+      if (pm && !heads.has(pm[1])) {
+        q = byLen.find((x) => /^\d/.test(x.base) && fits(pm[2], x.base));
+        if (q) return { q, rest: pm[2].slice(q.base.length) };
+      }
+      return null;
+    };
     const questionOf = (name) => {
-      const up = name.toUpperCase();
-      return byLen.find((q) => up.startsWith(q.base) && (up.length === q.base.length || /[A-Z]/.test(up[q.base.length])));
+      const hit = matchQuestion(name);
+      return hit ? hit.q : null;
     };
 
     // --- Variable Labels: 변수명 | 문항 - 항목 | 단위/문구
@@ -386,16 +431,25 @@
 
     // --- 변수명 규칙으로 유형·묶음 정하기
     const mx7cols = new Map(); // 행렬 멀티 문항의 열 개수
-    vars.forEach((v) => {
-      const q = questionOf(v.name);
+    // 밑줄형 변수명(SQ2_1, Y4_3, Y20_1순위)을 기호형(N1, MT3, R1)으로 맞춤
+    const normalizeRest = (rest, qtype) => {
+      if (/^_?9997(ET|_?TXT)?$/i.test(rest) || /_?\d*ET$/i.test(rest)) return '_TXT';
+      let m = /^_(\d+)\s*순위$/.exec(rest);
+      if (m) return 'R' + m[1];
+      m = /^_(\d+)$/.exec(rest);
+      if (m) {
+        const tag = { MX1: 'MT', MTP: 'M', MX3: 'M', NUM: 'N', NUD: 'N', RNK: 'R' }[qtype];
+        if (tag) return tag + m[1];
+      }
+      return rest;
+    };
+    const classify = (v, q, rest) => {
       const up = v.name.toUpperCase();
-      const rest = q ? up.slice(q.base.length) : '';
-      const qtype = q ? q.qtype : '';
-      const prefix = q ? `${q.code}. ` : '';
+      const qtype = q.qtype;
+      const prefix = `${q.code}. `;
       let m;
-      if (v.question && prefix) v.question = prefix + v.question;
-      if (!q) return;
-      if (/_TXT$/i.test(up) || /9997$/.test(rest) && /^(R|N|O)/.test(rest) || /N9999$/.test(rest)) {
+      rest = normalizeRest(rest, qtype);
+      if (/_TXT$/i.test(rest) || /_TXT$/i.test(up) || /9997$/.test(rest) && /^(R|N|O)/.test(rest) || /N9999$/.test(rest)) {
         v.type = 'exclude';
       } else if (/^[OPE]\d+$/.test(rest)) {
         v.type = 'exclude';
@@ -443,7 +497,32 @@
         if (v.type === 'numeric') v.codes = [];
       }
       if (v.type === 'numeric' && units.has(v.name)) v.question += ` (단위: ${units.get(v.name)})`;
+    };
+    vars.forEach((v) => {
+      const hit = matchQuestion(v.name);
+      if (!hit) return;
+      if (v.question) v.question = `${hit.q.code}. ${v.question}`;
+      classify(v, hit.q, hit.rest);
     });
+
+    // Variable Labels가 없거나 빠진 변수: 데이터 변수명을 질문번호에 맞춰 질문지만으로 만듦
+    const resolve = (name) => {
+      const hit = matchQuestion(name);
+      if (!hit || hit.q.qtype === 'MSG') return null;
+      const { q, rest } = hit;
+      const v = newVar(str(name));
+      v.codes = q.codes.filter((c) => c.label && !/^_+$/.test(c.label)).map((c) => ({ code: c.code, label: c.label }));
+      v.question = `${q.code}. ${q.text}`;
+      // 숫자 여러 칸(년/개월 등)은 칸 이름을 제목에 붙임
+      const nm = /^_?N?(\d+)$/.exec(normalizeRest(rest, q.qtype).replace(/^N/, '_'));
+      if (/^(NUM|NUD)$/.test(q.qtype) && nm) {
+        const part = q.codes.find((c) => c.code === Number(nm[1]));
+        const label = part ? part.label.replace(/_+/g, '').trim() : '';
+        if (label) v.question += ` - ${label}`;
+      }
+      classify(v, q, rest);
+      return v;
+    };
 
     // 행렬 멀티(MX7): 보기(1 예, 2 아니오, 3 예, 4 아니오)를 열마다 나누고, 열 제목은 질문 문장에서
     vars.forEach((v) => {
@@ -460,7 +539,7 @@
     });
 
     if (!questions.length) warnings.push('G-CAII 질문지 시트에서 문항을 찾지 못했습니다.');
-    return { vars, warnings, format: 'gcaii' };
+    return { vars, warnings, format: 'gcaii', resolve };
   }
 
   registerFormat({

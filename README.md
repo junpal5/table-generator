@@ -44,6 +44,8 @@
 
 | G-CAII (사내) | `문항ID·문항타입·보기` 질문지 시트 + `Variable Labels`, `Value Labels` | 질문지의 질문번호·문항타입(SIG·MTP·MX1·MX3·MX7·RNK·NUM·OPN…), Variable Labels의 문항·단위, Value Labels(`1.'보기'`) |
 
+G-CAII 코드북에 `Variable Labels`·`Value Labels` 시트가 없고 질문지 시트만 있으면, 데이터 변수명을 질문번호에 맞춰 변수를 만듭니다. 이때 데이터 쪽 접두어(`Y1` ↔ 질문 `1]`), 밑줄형 이름(`SQ2_1`, `Y4_3`, `Y20_1순위`, `SQ1_9997ET`), 영문 전체 문항타입(`단순응답형(Single Answer)`, `척도형(Matrix - single)` 등)도 알아봅니다.
+
 G-CAII는 변수명 규칙으로 문항을 묶습니다: `B2M1`(복수응답) · `B4MT1`(행렬 단일 → 단일/척도 묶음) · `B5MT1M1`(행렬 복수 → 열별 복수응답, Base 전체) · `D3C1MT1`(행렬 멀티 → 열별 단일 묶음, 열 제목은 질문 문장에서) · `B7R1`(순위) · `C2N1`(숫자, 단위 표시) · `A1O1`/`P`/`E`(주관식·전화·메일 → 제외) · 질문번호의 `-`는 `K`(`B5-1` → `B5K1…`).
 
 INT64 문항유형은 이렇게 바뀝니다: RADIO → 단일, RADIOSET → 척도, RADIOSETS → 단일/척도 묶음(보기로 판단), CHECK·HCHECK·CHECKSETS → 복수응답, GRADE_CLICK → 순위, NUMBER·HNUMBER → 수치, TEXT·TEXTAREA·ADDR → 제외.
