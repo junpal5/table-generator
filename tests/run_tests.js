@@ -311,6 +311,53 @@ test('문자로만 된 지역 열을 배너용 보기로 변환', () => {
   assert.deepStrictEqual(r.codes.map((c) => c.label), ['경기', '서울']); // '-'는 빈칸 처리
 });
 
+test('G-CAII 질문지 시트만 있는 코드북 (Variable/Value Labels 없음)', () => {
+  const book = {
+    Questionnaire_예시: [
+      ['문항ID', '문항타입', '보기', '로직', 'Page'],
+      ['Q3', '단순응답형(Single Answer)', 'SQ1] 소속', null, 2], [null, null, '1. 보육교사'], [null, null, '2. 원장'], [null, null, '9997. 기타'],
+      ['Q4', '숫자형(Numeric)', 'SQ2] 보육업무 경력', null, 3], [null, null, '1. _____________년'], [null, null, '2. _____________개월'],
+      ['Q15', '척도형(Matrix - single)', '4] 변경사항이 얼마나 적절하다고 생각하십니까?', null, 4],
+      [null, null, '1] 문서 간소화'], [null, null, '2] 평가주기'],
+      [null, null, '1. '], [null, null, null], [null, null, '매우 적절함'], [null, null, 1],
+      [null, null, '2. '], [null, null, '적절함'], [null, null, 2],
+      [null, null, '3. '], [null, null, '적절하지 않음'], [null, null, 3],
+      [null, null, '4. '], [null, null, '전혀 적절하지 않음'], [null, null, 4],
+      ['Q28', '단순응답형(Single Answer)', '12-1] 필요한 이유', null, 5], [null, null, '1. 객관성'], [null, null, '2. 신뢰']
+      , ['Q36', '순위형(Ranking)', '17-1] 도움 영역 2가지', null, 6], [null, null, '2순위(==)'], [null, null, '1. 보육과정'], [null, null, '2. 상호작용'], [null, null, '3. 안전'],
+      ['Q43', '전화번호형(Phone Number)', '핸드폰번호] 번호 입력', null, 7],
+    ],
+  };
+  const d = TG.prepareData([
+    ['응답ID', 'SQ1', 'SQ1_9997ET', 'SQ2_1', 'SQ2_2', 'Y4_1', 'Y4_2', 'Y12K1', 'Y17K1_1순위', 'Y17K1_2순위', '핸드폰번호'],
+    [1, 1, null, 3, 2, 1, 2, 1, 1, 2, '010'],
+    [2, 2, null, 10, 0, 2, 2, 2, 3, 1, null],
+    [3, 9997, 7, null, null, 4, 3, 1, 2, 3, null],
+  ]);
+  const cb = TG.parseCodebookBook(book, { format: 'auto' });
+  assert.strictEqual(cb.format, 'gcaii');
+  const items = TG.buildItems(cb, d).items;
+  const f = (v) => items.find((i) => i.vars[0] === v);
+  assert.strictEqual(f('SQ1').kind, 'single');
+  assert.strictEqual(f('SQ1').include, true);
+  assert.strictEqual(f('SQ1_9997ET').kind, 'exclude');
+  assert.strictEqual(f('SQ2_1').kind, 'numeric');
+  assert.strictEqual(f('SQ2_1').title, 'SQ2. 보육업무 경력 - 년');
+  assert.strictEqual(f('SQ2_2').title, 'SQ2. 보육업무 경력 - 개월');
+  const y4 = f('Y4_1'); // 데이터의 Y 접두어는 떼고 질문 4번에 맞춤
+  assert.strictEqual(y4.kind, 'scaleset');
+  assert.deepStrictEqual(y4.itemLabels, ['문서 간소화', '평가주기']);
+  assert.deepStrictEqual(y4.codes.map((c) => c.label), ['매우 적절함', '적절함', '적절하지 않음', '전혀 적절하지 않음']);
+  assert.strictEqual(f('Y12K1').title, '12-1. 필요한 이유');
+  assert.strictEqual(f('Y17K1_1순위').kind, 'rank');
+  assert.deepStrictEqual(f('Y17K1_1순위').vars, ['Y17K1_1순위', 'Y17K1_2순위']);
+  assert.strictEqual(f('핸드폰번호').kind, 'exclude');
+  // 1=매우 적절함이 긍정 → 긍정(Top2)은 1·2번
+  const t = TG.computeTables([y4], d, {}).tables[0];
+  const top = t.columns.findIndex((c) => /Top2/.test(c.label));
+  near(t.rows[0].values[top], (2 / 3) * 100, 'Top2');
+});
+
 console.log('표 모양');
 test('보고서형/배너형 격자', () => {
   const t = tbl('SQ1. 귀하의 성별은 무엇입니까?');

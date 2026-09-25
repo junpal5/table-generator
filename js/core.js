@@ -204,7 +204,7 @@
   // ------------------------------------------------------------------
   // 자동 인식
   // ------------------------------------------------------------------
-  const SCALE_WORD = /(전혀|매우|보통|그렇다|그렇지|만족|불만|동의|반대|중요|좋|나쁘|편리|불편|필요|높|낮|긍정|부정|찬성|많|적|약간|대체로|다소|도움|강함|약함|의향|쉽|어렵|\d+\s*점)/;
+  const SCALE_WORD = /(전혀|매우|보통|그렇다|그렇지|만족|불만|동의|반대|중요|좋|나쁘|편리|불편|필요|높|낮|긍정|부정|찬성|많|적|약간|대체로|다소|도움|강함|약함|의향|쉽|어렵|적절|\d+\s*점)/;
   const DK_WORD = /(모름|무응답|해당\s*없|잘\s*모|기타|거절|dk|n\/a)/i;
   const ID_NAME = /^(id|no|num|seq|번호|연번|일련|resp|sampleid|pid|uid|caseid|serial)(_?\d*)?$/i;
   const WEIGHT_NAME = /^(w|wt|wgt|weight|weights|가중치|가중)(_?\w*)?$/i;
@@ -377,7 +377,16 @@
   function buildItems(codebook, data) {
     const warnings = [];
     const cbVars = codebook ? codebook.vars : new Map();
+    // 형식에 따라 코드북에 변수 목록이 없으면(질문지만 있는 경우) 데이터 변수명으로 찾아 채움
+    if (codebook && codebook.resolve) {
+      data.order.forEach((key) => {
+        if (cbVars.has(key)) return;
+        const v = codebook.resolve(data.columns.get(key).name);
+        if (v) cbVars.set(key, v);
+      });
+    }
     const hasCodebook = cbVars.size > 0;
+    if (codebook && !hasCodebook) warnings.push('코드북과 데이터의 변수명을 하나도 맞추지 못했습니다. 코드북 형식 선택이 맞는지 확인해 주세요.');
     const blank = new Map();
     const cbOf = (key) => {
       if (cbVars.has(key)) return cbVars.get(key);
@@ -738,7 +747,7 @@
     const max = valid[valid.length - 1].code;
     const lowLab = valid[0].label;
     const highLab = valid[valid.length - 1].label;
-    const posLow = /(매우|아주|항상).{0,3}(그렇다|만족|동의|중요|좋|필요|찬성|높|편리)/.test(lowLab) && !/않|불|없/.test(lowLab);
+    const posLow = /(매우|아주|항상).{0,3}(그렇다|만족|동의|중요|좋|필요|찬성|높|편리|적절|도움)/.test(lowLab) && !/않|불|없/.test(lowLab);
     const negHigh = /(전혀|매우\s*(불|나쁘|낮|반대)|아주\s*(불|나쁘))/.test(highLab);
     const positiveHigh = !(posLow || negHigh);
     const k = valid.length >= 4 ? 2 : 1;
