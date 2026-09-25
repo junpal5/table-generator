@@ -119,18 +119,34 @@
 
     <!-- 4단계 -->
     <section class="card hidden" id="step4">
-      <div class="row gap">
+      <!-- 스크롤해도 위에 붙어 있는 결과 도구 모음 -->
+      <div class="result-bar" id="resultBar">
         <h2><span class="step">4</span> 결과 <small id="resultInfo"></small></h2>
         <span class="spacer"></span>
+        <span class="now" id="nowTable" aria-live="polite"></span>
+        <button class="btn" id="btnBackToSettings" title="3단계 표 설정으로 이동">표 설정 바꾸기</button>
         <button class="btn primary" id="btnExcel">엑셀로 저장</button>
         <button class="btn primary" id="btnHwpx" title="한글 2014 이상에서 열 수 있는 .hwpx 파일">한글로 저장</button>
       </div>
       <div class="result">
-        <nav id="toc" class="toc"></nav>
+        <nav class="toc" aria-label="표 목록">
+          <div class="toc-tools">
+            <input type="search" id="tocSearch" placeholder="표 번호·제목·변수 찾기" aria-label="표 찾기">
+            <span id="tocCount" class="toc-count"></span>
+          </div>
+          <div id="toc" class="toc-list"></div>
+        </nav>
         <div id="tables" class="tables"></div>
       </div>
     </section>
   </main>
+
+  <!-- 화면 오른쪽 아래 이동 버튼 (스크롤을 내리면 나타남) -->
+  <div class="floatnav hidden" id="floatNav" aria-label="빠른 이동">
+    <button type="button" id="goTop" title="페이지 맨 위로 (파일 올리기)">▲<span>맨 위</span></button>
+    <button type="button" id="goSettings" title="3단계 표 설정으로">⚙<span>설정</span></button>
+    <button type="button" id="goResults" title="결과 첫 표로">▤<span>결과</span></button>
+  </div>
 
   <footer class="wrap foot">설문 통계표 생성기 · 모든 계산은 사용자의 브라우저에서 이루어집니다.</footer>
 

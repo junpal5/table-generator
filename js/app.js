@@ -386,10 +386,125 @@
     const { tables } = state.result;
     const opts = state.opts;
     $('resultInfo').textContent = `표 ${tables.length}개 · 응답자 ${state.result.n.toLocaleString('ko-KR')}명${opts.weightVar ? ' · 가중치 ' + opts.weightVar : ''}`;
-    $('toc').innerHTML = tables.map((t) => `<a href="#t${t.no}"><b>${t.no}</b>${esc(t.title)}</a>`).join('');
+    $('toc').innerHTML = tables
+      .map((t) => `<a href="#t${t.no}" data-no="${t.no}" data-find="${esc((t.no + ' ' + t.title + ' ' + t.vars.join(' ')).toLowerCase())}"><b>${t.no}</b>${esc(t.title)}</a>`)
+      .join('');
     $('tables').innerHTML = tables.length ? tables.map((t) => TG.tableHTML(t, opts)).join('') : '<p>선택된 문항이 없습니다.</p>';
+    $('tocSearch').value = '';
+    filterToc();
     $('step4').classList.remove('hidden');
+    updateBarHeight();
+    watchTables();
     $('step4').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  // ------------------------------------------------------------------
+  // 결과 화면 이동 편의 기능
+  // ------------------------------------------------------------------
+  // 위에 붙는 도구 모음 높이만큼 목차·표 위치를 내림
+  function updateBarHeight() {
+    const h = $('resultBar').offsetHeight || 64;
+    document.documentElement.style.setProperty('--bar-h', h + 'px');
+  }
+
+  // 표 찾기: 번호("12"), 제목 일부, 변수명으로 목록을 줄임
+  function filterToc() {
+    const q = $('tocSearch').value.trim().toLowerCase();
+    const links = $('toc').querySelectorAll('a');
+    let shown = 0;
+    links.forEach((a) => {
+      const hit = !q || (/^\d+$/.test(q) ? a.dataset.no === q || a.dataset.find.includes(q) : a.dataset.find.includes(q));
+      a.hidden = !hit;
+      if (hit) shown++;
+    });
+    let empty = $('toc').querySelector('.empty');
+    if (!shown && links.length) {
+      if (!empty) {
+        empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = '맞는 표가 없습니다.';
+        $('toc').appendChild(empty);
+      }
+    } else if (empty) empty.remove();
+    $('tocCount').textContent = q ? `${links.length}개 중 ${shown}개` : `표 ${links.length}개`;
+  }
+
+  function goToTable(no) {
+    const el = document.getElementById('t' + no);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1200);
+    history.replaceState(null, '', '#t' + no);
+  }
+
+  // 지금 보고 있는 표를 목차에 표시하고, 도구 모음에 제목을 보여 줌
+  let observer = null;
+  function watchTables() {
+    if (observer) observer.disconnect();
+    if (!('IntersectionObserver' in window)) return;
+    const visible = new Map();
+    observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => (e.isIntersecting ? visible.set(e.target.id, e.target) : visible.delete(e.target.id)));
+        const top = Array.from(visible.values()).sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0];
+        if (top) setActive(top.id.slice(1));
+      },
+      { rootMargin: `-${($('resultBar').offsetHeight || 64) + 4}px 0px -55% 0px` },
+    );
+    document.querySelectorAll('#tables .tbl').forEach((el) => observer.observe(el));
+  }
+
+  function setActive(no) {
+    const toc = $('toc');
+    const prev = toc.querySelector('a.active');
+    if (prev && prev.dataset.no === no) return;
+    if (prev) prev.classList.remove('active');
+    const a = toc.querySelector(`a[data-no="${no}"]`);
+    if (!a) return;
+    a.classList.add('active');
+    // 목차 안에서만 스크롤해서 현재 표가 보이게 함 (페이지는 움직이지 않음)
+    const list = toc;
+    const top = a.offsetTop - list.offsetTop;
+    if (top < list.scrollTop || top > list.scrollTop + list.clientHeight - a.offsetHeight) {
+      list.scrollTop = top - list.clientHeight / 3;
+    }
+    const t = state.result && state.result.tables.find((x) => String(x.no) === no);
+    $('nowTable').textContent = t ? `지금: 표 ${t.no}. ${t.title}` : '';
+  }
+
+  function bindNavigation() {
+    $('tocSearch').addEventListener('input', filterToc);
+    $('tocSearch').addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      const first = Array.from($('toc').querySelectorAll('a')).find((a) => !a.hidden);
+      if (first) goToTable(first.dataset.no);
+    });
+    $('toc').addEventListener('click', (e) => {
+      const a = e.target.closest('a');
+      if (!a) return;
+      e.preventDefault();
+      goToTable(a.dataset.no);
+    });
+    const smoothTo = (el) => el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    $('goTop').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+    $('goSettings').addEventListener('click', () => smoothTo($('step3')));
+    $('goResults').addEventListener('click', () => smoothTo($('step4')));
+    $('btnBackToSettings').addEventListener('click', () => smoothTo($('step3')));
+    const onScroll = () => {
+      const far = window.scrollY > 500;
+      $('floatNav').classList.toggle('hidden', !far);
+      $('goSettings').hidden = $('step3').classList.contains('hidden');
+      $('goResults').hidden = $('step4').classList.contains('hidden');
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('resize', () => {
+      if (!$('step4').classList.contains('hidden')) {
+        updateBarHeight();
+        watchTables();
+      }
+    });
+    onScroll();
   }
 
   async function saveAs(btnId, label, what, run) {
@@ -415,6 +530,7 @@
   // ------------------------------------------------------------------
   $('cbFormat').innerHTML += TG.FORMATS.map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
   $('cbFormat').addEventListener('change', updateFormatInfo);
+  bindNavigation();
   bindDrop('dropData', 'fileData', 'data');
   bindDrop('dropCb', 'fileCb', 'cb');
   bindItemTable();
