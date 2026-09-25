@@ -73,8 +73,8 @@
     );
   }
 
-  function paraPrXml(id, align, prev) {
-    const margin = `<hh:margin><hc:intent value="0" unit="HWPUNIT"/><hc:left value="0" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="${prev || 0}" unit="HWPUNIT"/><hc:next value="0" unit="HWPUNIT"/></hh:margin><hh:lineSpacing type="PERCENT" value="130" unit="HWPUNIT"/>`;
+  function paraPrXml(id, align, next) {
+    const margin = `<hh:margin><hc:intent value="0" unit="HWPUNIT"/><hc:left value="0" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="0" unit="HWPUNIT"/><hc:next value="${next || 0}" unit="HWPUNIT"/></hh:margin><hh:lineSpacing type="PERCENT" value="130" unit="HWPUNIT"/>`;
     return (
       `<hh:paraPr id="${id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="0" suppressLineNumbers="0" checked="0" textDir="LTR">` +
       `<hh:align horizontal="${align}" vertical="CENTER"/><hh:heading type="NONE" idRef="0" level="0"/>` +
@@ -108,7 +108,7 @@
         charPrXml(ids.cp.note, { size: 8, color: '#595959' }) + charPrXml(ids.cp.cover, { size: 16, bold: true }),
       5,
     );
-    xml = addToList(xml, 'paraProperties', paraPrXml(ids.pp.center, 'CENTER') + paraPrXml(ids.pp.right, 'RIGHT') + paraPrXml(ids.pp.left, 'LEFT') + paraPrXml(ids.pp.title, 'LEFT', 1400), 4);
+    xml = addToList(xml, 'paraProperties', paraPrXml(ids.pp.center, 'CENTER') + paraPrXml(ids.pp.right, 'RIGHT') + paraPrXml(ids.pp.left, 'LEFT') + paraPrXml(ids.pp.title, 'LEFT', 600), 4);
     return { xml, ids };
   }
 
@@ -118,9 +118,10 @@
   let pid = 1000;
   const nextId = () => String(++pid);
 
-  function para(text, ppId, cpId) {
+  // newPage: 이 문단 앞에서 쪽을 나눔 (표마다 새 쪽에서 시작)
+  function para(text, ppId, cpId, newPage) {
     const t = text ? `<hp:t>${esc(text)}</hp:t>` : '<hp:t/>';
-    return `<hp:p id="${nextId()}" paraPrIDRef="${ppId}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${cpId}">${t}</hp:run></hp:p>`;
+    return `<hp:p id="${nextId()}" paraPrIDRef="${ppId}" styleIDRef="0" pageBreak="${newPage ? 1 : 0}" columnBreak="0" merged="0"><hp:run charPrIDRef="${cpId}">${t}</hp:run></hp:p>`;
   }
 
   // 글자 수로 열 너비 비율을 정함 (숫자 열은 좁게, 구분·보기 이름 열은 넓게)
@@ -199,7 +200,8 @@
     ];
     info.forEach((t) => (body += para(t, ids.pp.left, ids.cp.note)));
     result.tables.forEach((t) => {
-      body += para(`표 ${t.no}. ${t.title}`, ids.pp.title, ids.cp.title);
+      // 한 쪽에 표 하나: 표 제목마다 새 쪽에서 시작 (첫 쪽은 생성 정보)
+      body += para(`표 ${t.no}. ${t.title}`, ids.pp.title, ids.cp.title, true);
       if (t.kind === 'error') {
         body += para(t.notes.join(' '), ids.pp.left, ids.cp.note);
         return;
