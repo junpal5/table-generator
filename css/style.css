@@ -63,6 +63,9 @@ body {
 .btn.primary:disabled { background: #9db1dc; border-color: #9db1dc; cursor: not-allowed; }
 .btn.ghost { color: var(--accent); }
 .btn.tiny { padding: 3px 9px; font-size: 12px; }
+.sep { width: 1px; height: 18px; background: var(--line); margin: 0 2px; }
+table.grid td.sort { text-align: center; }
+table.grid td.sort .na { color: #c0c5ce; }
 .btn.big { padding: 11px 28px; font-size: 15px; }
 
 .msg { margin-top: 12px; padding: 10px 12px; border-radius: 7px; background: var(--accent-soft); }

@@ -902,6 +902,39 @@
     return mkTable(item, title, 'summary', columns, rows, notes);
   }
 
+  // ------------------------------------------------------------------
+  // 보기 정렬 (전체 기준 큰 순서)
+  //   평균을 내는 수치 문항과 척도 문항은 보기 순서 자체가 의미가 있어 정렬하지 않습니다.
+  // ------------------------------------------------------------------
+  const SORTABLE_KINDS = ['single', 'multi01', 'rank', 'multicode', 'singleset'];
+  // 기타·모름·해당 없음 같은 보기는 크기와 상관없이 맨 뒤에 둠
+  const KEEP_LAST = /(기타|모름|무응답|해당\s*(사항\s*)?없|^없음|없음$|잘\s*모|거절|미정의 코드)/;
+
+  function canSort(item) {
+    return SORTABLE_KINDS.includes(item.kind);
+  }
+
+  function sortTableColumns(table) {
+    const total = table.rows.find((r) => r.isTotal) || table.rows[0];
+    if (!total) return table;
+    const idx = table.columns.map((c, i) => i).filter((i) => !table.columns[i].isSum && !table.columns[i].isStat);
+    if (idx.length < 2) return table;
+    const val = (i) => (total.values[i] == null ? -1 : total.values[i]);
+    const last = (i) => KEEP_LAST.test(table.columns[i].label);
+    const sorted = idx.slice().sort((a, b) => {
+      if (last(a) !== last(b)) return last(a) ? 1 : -1;
+      if (last(a)) return a - b; // 뒤로 보낸 보기끼리는 원래 순서
+      return val(b) - val(a) || a - b;
+    });
+    // 정렬 대상 열 자리에 정렬된 순서로 채우고, 계·평균 같은 열은 그대로 둠
+    const order = table.columns.map((c, i) => i);
+    idx.forEach((pos, k) => (order[pos] = sorted[k]));
+    table.columns = order.map((i) => table.columns[i]);
+    table.rows.forEach((r) => (r.values = order.map((i) => r.values[i])));
+    table.sorted = true;
+    return table;
+  }
+
   /**
    * 선택된 문항과 옵션으로 모든 표를 계산합니다.
    * opts = { banners:[{var,label}], weightVar, decimals, showSum }
@@ -914,6 +947,7 @@
     items.forEach((item) => {
       if (!item.include) return;
       const kind = item.kind;
+      const start = tables.length;
       try {
         if (kind === 'single' || kind === 'scale') {
           tables.push(singleTables(item, item.keys[0], item.title, data, segs, w, opts, kind === 'scale').table);
@@ -957,13 +991,21 @@
       } catch (e) {
         tables.push({ itemId: item.id, title: item.title, kind: 'error', columns: [], rows: [], notes: ['계산 오류: ' + e.message], vars: item.vars });
       }
+      if (item.sort && canSort(item)) {
+        tables.slice(start).forEach((t) => {
+          // 단일응답 묶음은 개별 표(예/아니오 등)는 그대로 두고 항목을 비교하는 요약표만 정렬
+          if (t.kind === 'error' || (kind === 'singleset' && t.kind !== 'summary')) return;
+          sortTableColumns(t);
+          t.notes.push('보기는 전체 기준 큰 순서로 정렬(기타·모름 등은 맨 뒤)');
+        });
+      }
     });
     tables.forEach((t, i) => (t.no = i + 1));
     return { tables, n: data.n, segments: segs.map((s) => ({ group: s.group, label: s.label })) };
   }
 
   Object.assign(TG, {
-    KINDS, SINGLE_KINDS, GROUP_KINDS,
+    KINDS, SINGLE_KINDS, GROUP_KINDS, SORTABLE_KINDS, canSort,
     str, toNum, keyOf, normType, shortName,
     parseInlineCodes, parseCodebook, prepareData, buildItems, computeTables,
   });

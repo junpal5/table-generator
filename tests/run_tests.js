@@ -358,6 +358,51 @@ test('G-CAII 질문지 시트만 있는 코드북 (Variable/Value Labels 없음)
   near(t.rows[0].values[top], (2 / 3) * 100, 'Top2');
 });
 
+console.log('보기 정렬');
+test('단일응답: 전체 기준 큰 순서, 기타·모름은 맨 뒤, 계는 그대로', () => {
+  const d = TG.prepareData([['G', 'A'], [1, 3], [2, 1], [1, 3], [2, 3], [1, 9], [2, 2], [1, 9], [1, 9], [2, 9]]);
+  const c = TG.parseCodebook([['변수명', '문항', '코드', '레이블'], ['A', '이용 채널', 1, '매장'], ['', '', 2, '앱'], ['', '', 3, '웹'], ['', '', 9, '기타'],
+    ['G', '성별', 1, '남'], ['', '', 2, '여']]);
+  const items = TG.buildItems(c, d).items;
+  const a = items.find((i) => i.vars[0] === 'A');
+  a.sort = true;
+  const t = TG.computeTables([a], d, { banners: [{ var: 'G', label: '성별', codes: items.find((i) => i.vars[0] === 'G').codes }] }).tables[0];
+  // 기타(4명)가 가장 크지만 맨 뒤, 나머지는 웹(3) > 매장(1) = 앱(1) → 동률은 원래 순서
+  assert.deepStrictEqual(t.columns.map((x) => x.label), ['웹', '매장', '앱', '기타', '계']);
+  near(t.rows[0].values[0], (3 / 9) * 100, '웹 %');
+  near(t.rows[0].values[3], (4 / 9) * 100, '기타 %');
+  // 배너 행도 같은 열 순서로 따라감 (남: 3,9,3,9,9 → 웹 2/5)
+  near(t.rows[1].values[0], 40, '남자 웹 %');
+  assert.ok(t.notes.some((n) => /큰 순서/.test(n)));
+});
+test('정렬하지 않으면 코드북 순서 유지', () => {
+  const t = plain.tables.find((x) => x.title === 'SQ3. 거주 지역');
+  assert.strictEqual(t.columns[0].label, '서울');
+});
+test('복수응답·순위는 정렬, 척도·수치는 정렬 대상 아님', () => {
+  const multi = items.find((i) => i.vars[0] === 'Q3_1');
+  const rank = items.find((i) => i.vars[0] === 'Q4_1');
+  assert.ok(TG.canSort(multi) && TG.canSort(rank));
+  assert.ok(!TG.canSort(items.find((i) => i.vars[0] === 'Q1')));
+  assert.ok(!TG.canSort(items.find((i) => i.vars[0] === 'Q2_1')));
+  assert.ok(!TG.canSort(items.find((i) => i.vars[0] === 'Q5')));
+  const r = TG.computeTables([{ ...multi, sort: true }, { ...rank, sort: true }], data, {});
+  r.tables.forEach((t) => {
+    const vals = t.columns.map((c, i) => [c, t.rows[0].values[i]]).filter(([c]) => !c.isSum && !/기타/.test(c.label)).map(([, v]) => v);
+    for (let i = 1; i < vals.length; i++) assert.ok(vals[i - 1] >= vals[i], `${t.title}: 내림차순이 아님`);
+  });
+  const rank2 = r.tables.find((t) => /1\+2순위/.test(t.title));
+  assert.strictEqual(rank2.columns[rank2.columns.length - 1].label, '기타');
+});
+test('단일응답 묶음은 요약표만 정렬하고 개별 표는 보기 순서 유지', () => {
+  const r = TG.computeTables([{ ...iv('A4_1A_1'), sort: true }], int64Data, {});
+  const each = r.tables.filter((t) => t.kind !== 'summary');
+  each.forEach((t) => assert.strictEqual(t.columns[0].label, '알고 있다'));
+  const sum = r.tables.find((t) => t.kind === 'summary');
+  assert.deepStrictEqual(sum.columns.map((c) => c.label), ['사업A', '사업B']); // 50% = 50% → 원래 순서
+  assert.ok(sum.sorted);
+});
+
 console.log('표 모양');
 test('보고서형/배너형 격자', () => {
   const t = tbl('SQ1. 귀하의 성별은 무엇입니까?');
