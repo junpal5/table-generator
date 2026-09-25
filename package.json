@@ -1,0 +1,14 @@
+{
+  "name": "table-generator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "데이터와 코드북을 올리면 설문 통계표를 자동으로 만들어 주는 웹 도구",
+  "scripts": {
+    "samples": "node tests/make_samples.js",
+    "test": "node tests/run_tests.js"
+  },
+  "devDependencies": {
+    "exceljs": "4.4.0",
+    "xlsx": "0.18.5"
+  }
+}
