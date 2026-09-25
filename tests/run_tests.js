@@ -434,6 +434,12 @@ test('HWPX 본문에 표 제목·표·주석이 들어감', () => {
   const widths = firstTbl.split('<hp:tr>')[2].match(/cellSz width="(\d+)"/g).map((x) => Number(x.match(/\d+/)[0]));
   assert.strictEqual(widths.reduce((a, b) => a + b, 0), 42520);
 });
+test('HWPX: 한 쪽에 표 하나 (표 제목마다 쪽 나눔)', () => {
+  const sec = TG.buildHwpxFiles(hwpxRes, hwpxOpts)['Contents/section0.xml'];
+  const breaks = sec.match(/<hp:p [^>]*pageBreak="1"[^>]*>(<hp:run [^>]*>)<hp:t>표 \d+\./g) || [];
+  assert.strictEqual(breaks.length, hwpxRes.tables.length);
+  assert.strictEqual((sec.match(/pageBreak="1"/g) || []).length, hwpxRes.tables.length);
+});
 test('HWPX 서식 목록 개수(itemCnt)가 실제 항목 수와 같음', () => {
   const h = TG.buildHwpxFiles(hwpxRes, hwpxOpts)['Contents/header.xml'];
   [['borderFills', 'borderFill'], ['charProperties', 'charPr'], ['paraProperties', 'paraPr']].forEach(([list, item]) => {
