@@ -5,6 +5,9 @@ const XLSX = require('xlsx');
 const TG = require('../js/core.js');
 require('../js/formats.js');
 require('../js/render.js');
+globalThis.JSZip = require('jszip');
+require('../js/hwpx-template.js');
+require('../js/export-hwpx.js');
 
 const SAMPLES = path.join(__dirname, '..', 'samples');
 const rows = (f) => {
@@ -13,14 +16,22 @@ const rows = (f) => {
 };
 
 let passed = 0;
+const pending = []; // 비동기 테스트(파일 압축 등)는 끝에서 기다림
 function test(name, fn) {
-  try {
-    fn();
+  const ok = () => {
     passed++;
     console.log('  ✓ ' + name);
-  } catch (e) {
+  };
+  const fail = (e) => {
     console.error('  ✗ ' + name + '\n    ' + e.message);
     process.exitCode = 1;
+  };
+  try {
+    const r = fn();
+    if (r && typeof r.then === 'function') pending.push(r.then(ok, fail));
+    else ok();
+  } catch (e) {
+    fail(e);
   }
 }
 const near = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg}: ${a} != ${b}`);
@@ -403,6 +414,44 @@ test('단일응답 묶음은 요약표만 정렬하고 개별 표는 보기 순�
   assert.ok(sum.sorted);
 });
 
+console.log('한글(HWPX) 저장');
+const hwpxOpts = { banners: [{ var: 'SQ1', label: '성별', codes: items.find((i) => i.vars[0] === 'SQ1').codes }], decimals: 1, orientation: 'row' };
+const hwpxRes = TG.computeTables(items.filter((i) => ['SQ1', 'Q3_1'].includes(i.vars[0])), data, hwpxOpts);
+test('HWPX 본문에 표 제목·표·주석이 들어감', () => {
+  const f = TG.buildHwpxFiles(hwpxRes, hwpxOpts);
+  assert.strictEqual(f.mimetype, 'application/hwp+zip');
+  const sec = f['Contents/section0.xml'];
+  assert.strictEqual((sec.match(/<hp:tbl /g) || []).length, hwpxRes.tables.length);
+  assert.ok(sec.includes('표 1. SQ1. 귀하의 성별은 무엇입니까?'));
+  assert.ok(sec.includes('※ Base: 해당 문항 응답자'));
+  // "구분"은 2칸 병합, 배너 그룹 "성별"은 2행 병합, 덮인 칸은 적지 않음
+  assert.ok(/<hp:t>구분<\/hp:t>.*?<hp:cellSpan colSpan="2" rowSpan="1"\/>/.test(sec));
+  assert.ok(/<hp:t>성별<\/hp:t>.*?<hp:cellSpan colSpan="1" rowSpan="2"\/>/.test(sec));
+  const firstTbl = sec.slice(sec.indexOf('<hp:tbl '), sec.indexOf('</hp:tbl>'));
+  const rows = firstTbl.split('<hp:tr>').slice(1).map((r) => (r.match(/<hp:tc /g) || []).length);
+  assert.deepStrictEqual(rows, [5, 5, 6, 5]); // 머리글·전체(구분 2칸 병합) 5칸, 남자 행은 성별 포함 6칸, 여자 행은 성별에 덮여 5칸
+  // 열 너비 합 = 본문 폭
+  const widths = firstTbl.split('<hp:tr>')[2].match(/cellSz width="(\d+)"/g).map((x) => Number(x.match(/\d+/)[0]));
+  assert.strictEqual(widths.reduce((a, b) => a + b, 0), 42520);
+});
+test('HWPX 서식 목록 개수(itemCnt)가 실제 항목 수와 같음', () => {
+  const h = TG.buildHwpxFiles(hwpxRes, hwpxOpts)['Contents/header.xml'];
+  [['borderFills', 'borderFill'], ['charProperties', 'charPr'], ['paraProperties', 'paraPr']].forEach(([list, item]) => {
+    const cnt = Number(new RegExp(`<hh:${list} itemCnt="(\\d+)"`).exec(h)[1]);
+    assert.strictEqual((h.match(new RegExp(`<hh:${item} `, 'g')) || []).length, cnt, list);
+  });
+});
+test('HWPX 압축 파일: mimetype이 맨 앞·무압축', async () => {
+  const bytes = await TG.buildHwpx(hwpxRes, hwpxOpts);
+  // ZIP 첫 항목 이름과 압축 방식(0 = 저장만)
+  const nameLen = bytes[26] | (bytes[27] << 8);
+  const name = Buffer.from(bytes.slice(30, 30 + nameLen)).toString();
+  assert.strictEqual(name, 'mimetype');
+  assert.strictEqual(bytes[8] | (bytes[9] << 8), 0);
+  const zip = await globalThis.JSZip.loadAsync(bytes);
+  assert.ok(zip.file('Contents/section0.xml') && zip.file('Contents/header.xml') && zip.file('Contents/content.hpf'));
+});
+
 console.log('표 모양');
 test('보고서형/배너형 격자', () => {
   const t = tbl('SQ1. 귀하의 성별은 무엇입니까?');
@@ -413,4 +462,4 @@ test('보고서형/배너형 격자', () => {
   assert.strictEqual(g2.length, 2 + 1 + 3); // 머리글 2 + 사례수 + 보기 2 + 계
 });
 
-console.log(`\n${passed}개 통과`);
+Promise.all(pending).then(() => console.log(`\n${passed}개 통과`));
