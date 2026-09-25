@@ -54,6 +54,8 @@ body {
 .spacer { flex: 1; }
 .links { color: var(--muted); font-size: 13px; }
 .links a { color: var(--accent); }
+.fmt { margin-top: -4px; margin-bottom: 12px; }
+.fmt .hint { color: var(--muted); }
 
 .btn { border: 1px solid var(--line); background: #fff; border-radius: 7px; padding: 8px 14px; font: inherit; cursor: pointer; }
 .btn:hover { border-color: var(--accent); }
@@ -91,10 +93,10 @@ select { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-
 .sub-opt { margin: 6px 0; font-size: 13px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .sub-opt label { display: inline; margin: 0; }
 .bannerlist { border: 1px solid var(--line); border-radius: 7px; max-height: 320px; overflow-y: auto; }
-.bannerlist .b { display: grid; grid-template-columns: 24px 60px 1fr 50px; gap: 6px; align-items: center; padding: 5px 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.bannerlist .b { display: grid; grid-template-columns: 24px minmax(60px, 120px) 1fr 50px; gap: 6px; align-items: center; padding: 5px 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .bannerlist .b:last-child { border-bottom: none; }
 .bannerlist .b.on { background: var(--accent-soft); }
-.bannerlist .b code { font-size: 12px; }
+.bannerlist .b code { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bannerlist .b input[type=text] { font: inherit; padding: 2px 5px; border: 1px solid var(--line); border-radius: 4px; }
 .bannerlist .b .cnt { color: var(--muted); font-size: 12px; text-align: right; }
 .bannerlist .order { display: inline-block; min-width: 18px; color: var(--accent); font-weight: 700; }

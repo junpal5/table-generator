@@ -36,6 +36,14 @@
           <select id="sheetCb" class="hidden" aria-label="코드북 시트 선택"></select>
         </div>
       </div>
+      <div class="row gap small fmt">
+        <label>코드북 형식
+          <select id="cbFormat">
+            <option value="auto">자동 감지</option>
+          </select>
+        </label>
+        <span id="fmtInfo" class="hint"></span>
+      </div>
       <div class="row gap">
         <button class="btn primary" id="btnAnalyze" disabled>문항 자동 인식</button>
         <button class="btn ghost" id="btnSample">예시 파일로 해보기</button>
@@ -125,6 +133,7 @@
   <script src="lib/xlsx.full.min.js"></script>
   <script src="lib/exceljs.min.js"></script>
   <script src="js/core.js"></script>
+  <script src="js/formats.js"></script>
   <script src="js/render.js"></script>
   <script src="js/export.js"></script>
   <script src="js/app.js"></script>

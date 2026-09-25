@@ -3,6 +3,7 @@ const assert = require('assert');
 const path = require('path');
 const XLSX = require('xlsx');
 const TG = require('../js/core.js');
+require('../js/formats.js');
 require('../js/render.js');
 
 const SAMPLES = path.join(__dirname, '..', 'samples');
@@ -125,6 +126,101 @@ test('가중 % = 가중치 합 비율', () => {
   s.forEach((x, i) => { tot += w[i]; if (x === 1) m += w[i]; });
   near(r.tables[0].rows[0].values[0], (m / tot) * 100, '가중 남자 %');
   near(r.tables[0].rows[0].wn, tot, '가중 사례수');
+});
+
+console.log('INT64 형식');
+// 실제 INT64 코드북과 같은 구조의 작은 가상 예시 (실제 조사 데이터는 저장소에 넣지 않음)
+const int64Book = {
+  GUIDE: [
+    ['변수명', '문항', '문항유형번호', '문항유형'],
+    ['A1_1', '기업명', 51, 'TEXT'],
+    ['A1_3', '설립연도', 51, 'TEXT'],
+    ['A1_3', null, null, 'NUMBER'],
+    ['A1_6', '기업형태', 11, 'RADIO'],
+    [1, '독립기업'], [2, '계열사'],
+    ['A2_1_1 TO A2_1_3', '보유 산업재산권(모두 응답)', 21, 'CHECK'],
+    [1, '특허권'], [2, '실용신안권'], [3, '디자인권'],
+    ['A4_1A_1', '인지 여부▶사업A', 61, 'RADIOSETS'], [1, '알고 있다'], [2, '모른다'],
+    ['A4_1A_2', '인지 여부▶사업B', 61, 'RADIOSETS'], [1, '알고 있다'], [2, '모른다'],
+    ['A5_2_1', '[1순위] 필요한 정책', 32, 'GRADE_CLICK'],
+    ['A5_2_1 TO A5_2_2', '[1-2순위] 필요한 정책', 32, 'GRADE_CLICK'],
+    [1, '비용 지원'], [2, '인력 지원'], [3, '정보 제공'],
+    ['A6_2', '보호 수준(0~10점)', 13, 'RADIOSET'],
+    [0, '매우 약함'], [1, '<--'], [2, '---'], [3, '---'], [4, '---'], [5, '보 통'], [6, '---'], [7, '---'], [8, '---'], [9, '-->'], [10, '매우 강함'],
+  ],
+  GUIDE2: [
+    ['ORD', 'COLUMNNAME', 'QUESTION', 'SUB_QUESTION', 'ANSWER', 'VALUE'],
+    ['1', 'A1_1', '기업명', '', '', ''],
+    ['2', 'A1_3', '설립연도', '', '', ''],
+    ['3', 'A1_6', '기업형태', '', '1', '독립기업'],
+    ['4', 'A1_6', '기업형태', '', '2', '계열사'],
+    ['5', 'A2_1_1', '보유 산업재산권(모두 응답)', '', '1', '특허권'],
+    ['6', 'A2_1_2', '보유 산업재산권(모두 응답)', '', '2', '실용신안권'],
+    ['7', 'A2_1_3', '보유 산업재산권(모두 응답)', '', '3', '디자인권'],
+    ['8', 'A4_1A_1', '인지 여부', '사업A', '1', '알고 있다'],
+    ['9', 'A4_1A_2', '인지 여부', '사업B', '1', '알고 있다'],
+    ['10', 'A5_2_1', '필요한 정책', '1', '1', '비용 지원'],
+    ['11', 'A5_2_2', '필요한 정책', '2', '1', '비용 지원'],
+    ['12', 'A6_2', '보호 수준(0~10점)', '', '0', '매우 약함'],
+  ],
+  'Variable Labels': [['Variable Labels', ''], ['A1_6', "' 기업형태'"]],
+  'Value Labels': [
+    ['Value Labels', ''],
+    ['/A1_6', ''], ['', "1 '독립기업'"], ['', "2 '계열사'"],
+    ['/A2_1_1 A2_1_2 A2_1_3', ''], ['', "1 '특허권'"], ['', "2 '실용신안권'"], ['', "3 '디자인권'"],
+    ['/A4_1A_1 A4_1A_2', ''], ['', "1 '알고 있다'"], ['', "2 '모른다'"],
+    ['/A5_2_1 A5_2_2', ''], ['', "1 '비용 지원'"], ['', "2 '인력 지원'"], ['', "3 '정보 제공'"],
+  ],
+};
+// 복수응답은 선택하면 보기 번호, 안 하면 빈칸. DE1은 코드북에 없고 옆 열에 이름이 있음
+const int64Data = TG.prepareData([
+  ['SEQ', 'LOI(s)', '주체분류', 'DE1', 'WT', 'A1_1', 'A1_3', 'A1_6', 'A2_1_1', 'A2_1_2', 'A2_1_3', 'A4_1A_1', 'A4_1A_2', 'A5_2_1', 'A5_2_2', 'A6_2'],
+  [1, 300, '01.대기업', 1, 2, '가', 2001, 1, 1, null, 3, 1, 2, 1, 2, 5],
+  [2, 310, '02.중소기업', 2, 1, '나', 2010, 2, 1, 2, null, 2, 2, 2, 3, 8],
+  [3, 320, '02.중소기업', 2, 1, '다', 2015, 1, null, null, 3, 1, 1, 1, 3, 10],
+  [4, 330, '01.대기업', 1, 1, '라', 2020, 2, 1, 2, 3, 2, 1, 3, 1, 0],
+]);
+const int64Cb = TG.parseCodebookBook(int64Book, { format: 'auto' });
+const int64 = TG.buildItems(int64Cb, int64Data).items;
+const iv = (v) => int64.find((i) => i.vars[0] === v);
+test('INT64 형식 자동 감지', () => assert.strictEqual(int64Cb.format, 'int64'));
+test('INT64 문항 유형', () => {
+  assert.strictEqual(iv('A1_1').kind, 'exclude');
+  assert.strictEqual(iv('A1_3').kind, 'numeric');
+  assert.strictEqual(iv('A1_6').kind, 'single');
+  assert.strictEqual(iv('A2_1_1').kind, 'multi01');
+  assert.deepStrictEqual(iv('A2_1_1').itemLabels, ['특허권', '실용신안권', '디자인권']);
+  assert.strictEqual(iv('A4_1A_1').kind, 'singleset');
+  assert.deepStrictEqual(iv('A4_1A_1').itemLabels, ['사업A', '사업B']);
+  assert.strictEqual(iv('A5_2_1').kind, 'rank');
+  assert.strictEqual(iv('A5_2_1').title, '필요한 정책');
+  assert.strictEqual(iv('A6_2').kind, 'scale');
+  assert.strictEqual(iv('A6_2').codes[1].label, '1점');
+  assert.strictEqual(iv('SEQ').kind, 'exclude');
+  assert.strictEqual(iv('LOI(s)').kind, 'exclude');
+  assert.strictEqual(iv('WT').kind, 'weight');
+});
+test('코드북에 없는 배너 변수의 보기 이름을 옆 열에서 찾기', () => {
+  const de1 = iv('DE1');
+  assert.strictEqual(de1.kind, 'single');
+  assert.strictEqual(de1.include, false); // 표는 기본 제외, 배너로는 사용 가능
+  assert.deepStrictEqual(de1.codes, [{ code: 1, label: '대기업' }, { code: 2, label: '중소기업' }]);
+});
+test('번호/빈칸 방식 복수응답 계산', () => {
+  const r = TG.computeTables([iv('A2_1_1')], int64Data, { banners: [{ var: 'DE1', label: '규모', codes: iv('DE1').codes }] });
+  const t = r.tables[0];
+  assert.strictEqual(t.rows[0].n, 4);
+  near(t.rows[0].values[0], 75, '특허권');
+  near(t.rows[0].values[1], 50, '실용신안권');
+  near(t.rows[0].values[2], 75, '디자인권');
+  assert.strictEqual(t.rows[1].label, '대기업');
+  near(t.rows[1].values[1], 50, '대기업 실용신안권');
+});
+test('단일응답 묶음 요약표', () => {
+  const r = TG.computeTables([iv('A4_1A_1')], int64Data, {});
+  const sum = r.tables.find((t) => /요약/.test(t.title));
+  assert.ok(sum, '요약표 없음');
+  near(sum.rows[0].values[0], 50, '사업A 인지율');
 });
 
 console.log('표 모양');

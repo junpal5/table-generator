@@ -51,6 +51,7 @@
       if (guess) sel.value = guess;
     }
     sel.classList.toggle('hidden', wb.SheetNames.length < 2);
+    if (!isData) updateFormatInfo();
     $('btnAnalyze').disabled = !state.files.data;
     hideMsg();
   }
@@ -79,6 +80,35 @@
       if (['SELECT', 'OPTION', 'INPUT'].includes(e.target.tagName)) return;
       $(inputId).click();
     });
+  }
+
+  // ------------------------------------------------------------------
+  // 코드북 형식
+  // ------------------------------------------------------------------
+  function codebookSheets() {
+    const wb = state.files.cb.wb;
+    const sheets = {};
+    wb.SheetNames.forEach((n) => (sheets[n] = sheetRows(wb, n)));
+    return sheets;
+  }
+
+  function chosenFormat() {
+    if (!state.files.cb) return null;
+    const v = $('cbFormat').value;
+    if (v !== 'auto') return TG.FORMATS.find((f) => f.id === v);
+    return TG.detectFormat(codebookSheets());
+  }
+
+  function updateFormatInfo() {
+    const fmt = chosenFormat();
+    if (!fmt) {
+      $('fmtInfo').textContent = '';
+      return;
+    }
+    const auto = $('cbFormat').value === 'auto';
+    $('fmtInfo').textContent = `${auto ? '감지된 형식' : '선택한 형식'}: ${fmt.name}${fmt.usesSheet ? '' : ' (모든 시트를 함께 읽음)'}`;
+    const sel = $('sheetCb');
+    sel.classList.toggle('hidden', !fmt.usesSheet || state.files.cb.wb.SheetNames.length < 2);
   }
 
   function showMsg(text, isError) {
@@ -116,7 +146,7 @@
       const warnings = [];
       if (state.files.cb) {
         const c = state.files.cb;
-        state.codebook = TG.parseCodebook(sheetRows(c.wb, $('sheetCb').value || c.wb.SheetNames[0]));
+        state.codebook = TG.parseCodebookBook(codebookSheets(), { format: $('cbFormat').value, sheet: $('sheetCb').value || c.wb.SheetNames[0] });
         warnings.push(...state.codebook.warnings);
       } else {
         state.codebook = null;
@@ -133,7 +163,8 @@
       $('step2').classList.remove('hidden');
       $('step3').classList.remove('hidden');
       $('step4').classList.add('hidden');
-      showMsg(`응답자 ${state.data.n.toLocaleString('ko-KR')}명, 변수 ${state.data.order.length}개를 읽었습니다.`);
+      const fmtText = state.codebook ? ` 코드북 형식: ${state.codebook.formatName}.` : '';
+      showMsg(`응답자 ${state.data.n.toLocaleString('ko-KR')}명, 변수 ${state.data.order.length}개를 읽었습니다.${fmtText}`);
       $('step2').scrollIntoView({ behavior: 'smooth' });
     } catch (e) {
       console.error(e);
@@ -246,7 +277,7 @@
             const name = state.bannerNames[it.id] || TG.shortName(it.title, it.vars[0]);
             return `<div class="b${idx >= 0 ? ' on' : ''}" data-id="${it.id}">
             <input type="checkbox"${idx >= 0 ? ' checked' : ''} aria-label="배너로 사용">
-            <code>${idx >= 0 ? `<span class="order">${idx + 1}</span>` : ''}${esc(it.vars[0])}</code>
+            <code title="${esc(it.vars[0])}">${idx >= 0 ? `<span class="order">${idx + 1}</span>` : ''}${esc(it.vars[0])}</code>
             <input type="text" value="${esc(name)}" aria-label="배너 이름">
             <span class="cnt">${it.codes.length}개</span>
           </div>`;
@@ -297,7 +328,7 @@
     return {
       banners: state.bannerOrder.map((id) => {
         const it = itemById(id);
-        return { var: it.vars[0], label: state.bannerNames[id] || TG.shortName(it.title, it.vars[0]) };
+        return { var: it.vars[0], label: state.bannerNames[id] || TG.shortName(it.title, it.vars[0]), codes: it.codes };
       }),
       weightVar: useW ? $('weightVar').value : null,
       baseMode: radio('baseMode'),
@@ -364,6 +395,8 @@
   }
 
   // ------------------------------------------------------------------
+  $('cbFormat').innerHTML += TG.FORMATS.map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
+  $('cbFormat').addEventListener('change', updateFormatInfo);
   bindDrop('dropData', 'fileData', 'data');
   bindDrop('dropCb', 'fileCb', 'cb');
   bindItemTable();

@@ -37,7 +37,7 @@
     numeric: '수치(평균)',
     singleset: '단일응답 묶음',
     scaleset: '척도 묶음',
-    multi01: '복수응답(0/1)',
+    multi01: '복수응답',
     rank: '순위응답',
     multicode: '복수응답(코드형)',
     exclude: '제외',
@@ -169,20 +169,23 @@
     names.forEach((name, c) => {
       if (!name) return;
       const values = new Array(body.length);
+      const raw = new Array(body.length);
       let nonNum = 0;
       let filled = 0;
       for (let i = 0; i < body.length; i++) {
-        const raw = body[i][c];
-        const n = toNum(raw);
+        const cell = body[i][c];
+        const n = toNum(cell);
         values[i] = n;
-        if (str(raw) !== '') {
+        raw[i] = cell;
+        if (str(cell) !== '') {
           filled++;
           if (n == null) nonNum++;
         }
       }
       const key = keyOf(name);
       if (columns.has(key)) return;
-      columns.set(key, { name, values, filled, nonNum, isText: nonNum > 0 && nonNum >= filled * 0.5 });
+      const isText = nonNum > 0 && nonNum >= filled * 0.5;
+      columns.set(key, { name, values, raw: isText ? raw : null, filled, nonNum, isText });
       order.push(key);
     });
     return { columns, order, n: body.length };
@@ -201,10 +204,12 @@
   // ------------------------------------------------------------------
   // 자동 인식
   // ------------------------------------------------------------------
-  const SCALE_WORD = /(전혀|매우|보통|그렇다|그렇지|만족|불만|동의|반대|중요|좋|나쁘|편리|불편|필요|높|낮|긍정|부정|찬성|많|적|높다|낮다|약간|대체로|다소)/;
+  const SCALE_WORD = /(전혀|매우|보통|그렇다|그렇지|만족|불만|동의|반대|중요|좋|나쁘|편리|불편|필요|높|낮|긍정|부정|찬성|많|적|약간|대체로|다소|도움|강함|약함|의향|쉽|어렵|\d+\s*점)/;
   const DK_WORD = /(모름|무응답|해당\s*없|잘\s*모|기타|거절|dk|n\/a)/i;
-  const ID_NAME = /^(id|no|num|번호|일련|resp|sampleid|pid|uid|caseid|serial)(_?\d*)?$/i;
+  const ID_NAME = /^(id|no|num|seq|번호|연번|일련|resp|sampleid|pid|uid|caseid|serial)(_?\d*)?$/i;
   const WEIGHT_NAME = /^(w|wt|wgt|weight|weights|가중치|가중)(_?\w*)?$/i;
+  // 온라인 조사 시스템이 붙이는 관리용 열
+  const SYSTEM_NAME = /^(group_id|start_time|end_time|loi(\(s\))?|loi_sum|access_key|user_agent.*|user_device|is_mobile|ip|data_time|result|last_question|last_before_question|status|duration|panel.*|device|browser)$/i;
 
   function scaleInfo(codes) {
     const valid = codes.filter((c) => !DK_WORD.test(c.label)).sort((a, b) => a.code - b.code);
@@ -220,6 +225,13 @@
     return hits >= Math.ceil(valid.length / 2);
   }
 
+  // "<--", "---" 처럼 기호만 있는 척도 보기 이름을 "3점"처럼 바꿉니다.
+  function fixLabels(codes) {
+    const placeholder = (l) => !str(l) || /^[\s<>\-=~.·→←]+$/.test(l);
+    if (!codes.some((c) => placeholder(c.label))) return codes;
+    return codes.map((c) => ({ code: c.code, label: placeholder(c.label) ? `${c.code}점` : /^\d+\s*점/.test(c.label) ? c.label : `${c.code}점(${str(c.label).replace(/\s+/g, ' ')})` }));
+  }
+
   function sameCodes(a, b) {
     if (a.length !== b.length) return false;
     return a.every((c, i) => c.code === b[i].code);
@@ -233,43 +245,109 @@
       while (i < p.length && i < s.length && p[i] === s[i]) i++;
       p = p.slice(0, i);
     }
+    // 단어 중간에서 잘리면("사업A/사업B" → "A/B") 앞의 구분 기호까지 물러남
+    const word = /[0-9A-Za-z가-힣]/;
+    if (p && word.test(p[p.length - 1]) && list.some((s) => s.length > p.length && word.test(s[p.length]))) {
+      let j = p.length - 1;
+      while (j >= 0 && word.test(p[j])) j--;
+      p = p.slice(0, j + 1);
+    }
     return p;
   }
 
   function cleanTitle(s) {
-    return str(s).replace(/[\s\-–—:·_(（\[]+$/, '').trim();
+    return str(s)
+      .replace(/^\[[^\]]*순위\]\s*/, '')
+      .replace(/[\s\-–—:·_(（\[▶◆■※]+$/, '')
+      .trim();
   }
 
-  function groupLabels(vars, cbOf, kind) {
-    const qs = vars.map((v) => str(cbOf(v).question));
+  function groupLabels(vars, cbOf, kind, data) {
+    const cbs = vars.map((v) => cbOf(v));
+    const qs = cbs.map((c) => str(c.question));
     const allHave = qs.every((q) => q);
+    const groupTitle = cbs.map((c) => c.groupTitle).find(Boolean);
     let title = '';
     let items;
-    if (allHave && new Set(qs).size > 1) {
+    if (cbs.every((c) => c.itemLabel)) {
+      title = groupTitle || cleanTitle(commonPrefix(qs)) || qs[0];
+      items = cbs.map((c) => c.itemLabel);
+    } else if (allHave && new Set(qs).size > 1) {
       const pre = commonPrefix(qs);
       title = cleanTitle(pre) || qs[0];
-      items = qs.map((q) => str(q.slice(pre.length)).replace(/^[\s\-–—:·_)）\]]+/, '').replace(/^([^(（]*)[)）]$/, '$1').trim() || q);
+      items = qs.map((q) => str(q.slice(pre.length)).replace(/^[\s\-–—:·_)）\]▶]+/, '').replace(/^([^(（]*)[)）]$/, '$1').trim() || q);
     } else {
       title = qs.find((q) => q) || vars[0];
       items = vars.map((v, i) => {
         if (kind === 'rank') return i + 1 + '순위';
-        const c1 = cbOf(v).codes.find((c) => c.code === 1);
-        if (kind === 'multi01' && c1 && !/^(예|선택|해당|yes|1|있음|체크)$/i.test(c1.label)) return c1.label;
-        return cbOf(v).name || v;
+        const cb = cbOf(v);
+        if (kind === 'multi01') {
+          // 선택 시 보기 번호가 들어가는 방식이면 그 번호의 보기 이름
+          const vals = Array.from(distinctValues(data.columns.get(v).values, 5)).filter((x) => x !== 0);
+          if (vals.length === 1) {
+            const hit = cb.codes.find((c) => c.code === vals[0]);
+            if (hit && !/^(예|선택|해당|yes|있음|체크)$/i.test(hit.label)) return hit.label;
+          }
+          const c1 = cb.codes.find((c) => c.code === 1);
+          if (c1 && cb.codes.length <= 2 && !/^(예|선택|해당|yes|1|있음|체크)$/i.test(c1.label)) return c1.label;
+          const m = /(\d+)$/.exec(cb.name || v);
+          const byPos = m && cb.codes.find((c) => c.code === Number(m[1]));
+          if (byPos && cb.codes.length > 2) return byPos.label;
+        }
+        return cb.name || v;
       });
     }
-    return { title, items };
+    return { title: cleanTitle(groupTitle || title) || title, items };
   }
 
   function shortName(title, fallback) {
     let s = str(title)
       .replace(/^\[?[A-Za-z]{0,4}\d+[\w\-]*[.)\]]?\s*/, '')
+      .replace(/\s*▶\s*/g, ' ')
       .replace(/[?？].*$/, '')
-      .replace(/^(귀하의|귀하는|귀하께서는|귀하께서|귀댁의|귀댁은|현재)\s*/, '')
+      .replace(/^(귀하의|귀하는|귀하께서는|귀하께서|귀댁의|귀댁은|귀사의|귀사는|현재)\s*/, '')
       .replace(/\s*(은|는|이|가)?\s*(무엇|어떻게|어디|몇|얼마).*$/, '')
       .trim();
     if (!s) s = fallback;
     return s.length > 20 ? s.slice(0, 20) + '…' : s;
+  }
+
+  // 코드북에 없는 숫자 변수의 보기 이름을, 1:1로 대응하는 문자 열에서 찾아옵니다.
+  // 예) DE1(1,2,3) ↔ 주체분류("01.대기업","02.중견기업","03.중소기업")
+  function findLabelColumn(key, data) {
+    const col = data.columns.get(key);
+    const d = distinctValues(col.values, 40);
+    if (d.size < 2 || d.size > 40 || !Array.from(d).every((v) => Number.isInteger(v))) return null;
+    let best = null;
+    for (const k2 of data.order) {
+      const other = data.columns.get(k2);
+      if (k2 === key || !other.isText || !other.raw) continue;
+      const fwd = new Map();
+      const back = new Map();
+      let ok = true;
+      let pairs = 0;
+      for (let i = 0; i < data.n && ok; i++) {
+        const v = col.values[i];
+        const t = str(other.raw[i]);
+        if (v == null || !t) {
+          if ((v == null) !== !t) ok = false;
+          continue;
+        }
+        pairs++;
+        if (fwd.has(v) && fwd.get(v) !== t) ok = false;
+        if (back.has(t) && back.get(t) !== v) ok = false;
+        fwd.set(v, t);
+        back.set(t, v);
+      }
+      if (!ok || pairs < Math.max(2, col.filled * 0.95)) continue;
+      const numbered = Array.from(fwd.entries()).every(([v, t]) => new RegExp('^0*' + v + '\\s*[.)]').test(t));
+      const codes = Array.from(fwd.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([v, t]) => ({ code: v, label: t.replace(/^\d+\s*[.)]\s*/, '') }));
+      const cand = { source: other.name, codes, score: numbered ? 2 : 1 };
+      if (!best || cand.score > best.score) best = cand;
+    }
+    return best;
   }
 
   /**
@@ -278,7 +356,13 @@
   function buildItems(codebook, data) {
     const warnings = [];
     const cbVars = codebook ? codebook.vars : new Map();
-    const cbOf = (key) => cbVars.get(key) || { name: data.columns.get(key) ? data.columns.get(key).name : key, question: '', codes: [], type: '', group: '' };
+    const hasCodebook = cbVars.size > 0;
+    const blank = new Map();
+    const cbOf = (key) => {
+      if (cbVars.has(key)) return cbVars.get(key);
+      if (!blank.has(key)) blank.set(key, { name: data.columns.get(key) ? data.columns.get(key).name : key, question: '', codes: [], type: '', group: '' });
+      return blank.get(key);
+    };
 
     // 코드북에만 있고 데이터에 없는 변수
     const missing = [];
@@ -302,10 +386,24 @@
       groups.get(g).push(key);
       groupOf.set(key, g);
     });
-    // 이름 패턴으로 묶였지만 명시적 단일 유형이거나 1개뿐이면 풀기
+    // 이름 패턴으로 묶였지만 개별 문항으로 봐야 하는 경우 풀기
     groups.forEach((keys, g) => {
-      const explicitSingle = keys.filter((k) => ['single', 'scale', 'numeric', 'weight'].includes(cbOf(k).type));
-      if (keys.length < 2 || (g.startsWith('P:') && explicitSingle.length === keys.length)) {
+      let split = keys.length < 2;
+      if (!split && g.startsWith('P:')) {
+        const types = keys.map((k) => cbOf(k).type);
+        const explicitSingle = types.every((t) => ['single', 'scale', 'numeric', 'weight', 'exclude'].includes(t));
+        // 보기 없는 연속형 숫자(종사자 수, 금액 등)
+        const numericLike = keys.every((k) => {
+          if (cbOf(k).codes.length) return false;
+          const col = data.columns.get(k);
+          if (col.isText) return true;
+          const d = distinctValues(col.values, 60);
+          return d.size > 50 || Array.from(d).some((v) => !Number.isInteger(v));
+        });
+        const anyText = keys.some((k) => data.columns.get(k).isText);
+        split = explicitSingle || numericLike || anyText;
+      }
+      if (split) {
         keys.forEach((k) => groupOf.delete(k));
         groups.delete(g);
       }
@@ -316,8 +414,9 @@
     let seq = 0;
 
     function codesFor(keys) {
-      for (const k of keys) if (cbOf(k).codes.length) return cbOf(k).codes.slice();
-      return [];
+      let best = [];
+      for (const k of keys) if (cbOf(k).codes.length > best.length) best = cbOf(k).codes;
+      return fixLabels(best.slice());
     }
 
     function addUnknownCodes(codes, keys) {
@@ -339,12 +438,16 @@
         const keys = groups.get(g);
         keys.forEach((k) => done.add(k));
         const explicit = keys.map((k) => cbOf(k).type).find((t) => t && t !== 'single' && t !== 'numeric') || '';
-        let codes = codesFor(keys);
+        const codes = codesFor(keys);
         let kind = '';
         let reason = '';
+        const perVar = keys.map((k) => distinctValues(data.columns.get(k).values, 50));
         const allVals = new Set();
-        keys.forEach((k) => distinctValues(data.columns.get(k).values, 50).forEach((v) => allVals.add(v)));
+        perVar.forEach((d) => d.forEach((v) => allVals.add(v)));
         const is01 = allVals.size > 0 && Array.from(allVals).every((v) => v === 0 || v === 1) && codes.every((c) => c.code === 0 || c.code === 1);
+        // 선택하면 보기 번호, 안 하면 빈칸(또는 0): Q_1=1, Q_2=2, Q_3=3 …
+        const nonZero = perVar.map((d) => Array.from(d).filter((v) => v !== 0));
+        const positional = !is01 && nonZero.every((d) => d.length <= 1) && new Set(nonZero.flat()).size === nonZero.filter((d) => d.length).length && nonZero.filter((d) => d.length).length >= 2;
         const textAll = keys.map((k) => cbOf(k).question).join(' ');
 
         if (explicit === 'exclude') {
@@ -355,6 +458,8 @@
           kind = explicit; reason = '코드북 지정';
         } else if (is01) {
           kind = 'multi01'; reason = '값이 0/1로만 구성';
+        } else if (positional) {
+          kind = 'multi01'; reason = '선택한 보기 번호/빈칸으로 구성';
         } else {
           const codeSets = keys.map((k) => cbOf(k).codes).filter((c) => c.length);
           const sorted = (c) => c.slice().sort((a, b) => a.code - b.code);
@@ -394,7 +499,7 @@
         if (!codes.length && (kind === 'rank' || kind === 'multicode')) {
           warnings.push(`${col.name} 등 ${keys.length}개 변수: 코드북에 보기가 없어 코드 번호로 표시합니다.`);
         }
-        const lab = groupLabels(keys, cbOf, kind);
+        const lab = groupLabels(keys, cbOf, kind, data);
         items.push({
           id: 'i' + ++seq,
           kind,
@@ -416,15 +521,22 @@
       done.add(key);
       const cb = cbOf(key);
       const inCodebook = cbVars.has(key);
-      let codes = cb.codes.slice();
+      let codes = fixLabels(cb.codes.slice());
       let kind = cb.type && SINGLE_KINDS.includes(cb.type) ? cb.type : '';
       let reason = kind ? '코드북 지정' : '';
+      let include = true;
+      if (kind === 'scale' && !scaleInfo(codes)) kind = codes.length ? 'single' : 'numeric';
       if (!kind && cb.type && cb.type !== 'single') {
         kind = cb.type === 'exclude' ? 'exclude' : ''; // 묶음 유형이 개별 변수에 지정된 경우 무시
+        if (kind) reason = '코드북 지정';
       }
       if (!kind) {
+        const dAll = distinctValues(col.values);
+        const allInt = Array.from(dAll).every((v) => Number.isInteger(v));
         if (WEIGHT_NAME.test(col.name)) {
           kind = 'weight'; reason = '변수명이 가중치 형태';
+        } else if (SYSTEM_NAME.test(col.name)) {
+          kind = 'exclude'; reason = '조사 시스템 관리 변수';
         } else if (col.isText) {
           kind = 'exclude'; reason = '문자(개방형) 응답';
         } else if (ID_NAME.test(col.name)) {
@@ -432,16 +544,27 @@
         } else if (codes.length) {
           if (looksLikeScale(codes)) { kind = 'scale'; reason = '척도형 보기'; }
           else { kind = 'single'; reason = '코드북 보기 있음'; }
+        } else if (dAll.size === 0) {
+          kind = 'exclude'; reason = '응답 없음';
+        } else if (dAll.size >= Math.max(20, data.n * 0.9) && allInt) {
+          kind = 'exclude'; reason = '값이 모두 달라 ID로 추정';
         } else {
-          const d = distinctValues(col.values, 30);
-          const allInt = Array.from(d).every((v) => Number.isInteger(v));
-          if (d.size === 0) { kind = 'exclude'; reason = '응답 없음'; }
-          else if (d.size >= Math.max(20, data.n * 0.9) && allInt) { kind = 'exclude'; reason = '값이 모두 달라 ID로 추정'; }
-          else if (!inCodebook && allInt && d.size <= 10) {
+          const found = !inCodebook ? findLabelColumn(key, data) : null;
+          if (found) {
+            kind = 'single'; reason = `보기 이름을 '${found.source}' 열에서 가져옴`;
+            codes = found.codes;
+            const srcCb = cbVars.get(keyOf(found.source));
+            cb.question = cb.question || (srcCb && srcCb.question) || found.source;
+          } else if (!inCodebook && !hasCodebook && allInt && dAll.size <= 10) {
             kind = 'single'; reason = '코드북에 없음 · 정수 코드';
-            codes = Array.from(d).sort((a, b) => a - b).map((v) => ({ code: v, label: '코드 ' + v }));
+            codes = Array.from(dAll).sort((a, b) => a - b).map((v) => ({ code: v, label: '코드 ' + v }));
             warnings.push(`${col.name}: 코드북에 없어 코드 값을 그대로 보기로 사용합니다.`);
           } else { kind = 'numeric'; reason = '보기 없는 숫자'; }
+        }
+        // 코드북이 있는데 코드북에 없는 변수(표본 정보 등)는 기본으로 표를 만들지 않음 (배너로는 사용 가능)
+        if (hasCodebook && !inCodebook && kind !== 'exclude' && kind !== 'weight') {
+          include = false;
+          reason += ' · 코드북에 없는 변수';
         }
       }
       items.push({
@@ -455,9 +578,22 @@
         itemLabels: [],
         codes,
         extraCodes: ['single', 'scale'].includes(kind) ? addUnknownCodes(codes, [key]) : [],
-        include: !['exclude', 'weight'].includes(kind),
+        include: include && !['exclude', 'weight'].includes(kind),
         isGroup: false,
       });
+    });
+
+    // 같은 제목의 표가 여러 개면 변수명을 붙여 구분
+    const seen = new Map();
+    items.forEach((it) => {
+      if (!it.include) return;
+      seen.set(it.title, (seen.get(it.title) || 0) + 1);
+    });
+    items.forEach((it) => {
+      if (it.include && seen.get(it.title) > 1) {
+        const tag = it.isGroup ? it.vars[0].replace(/[_.\-]\d+$/, '') : it.vars[0];
+        it.title = `${it.title} [${tag}]`;
+      }
     });
 
     items.forEach((it) => {
@@ -486,7 +622,7 @@
       const col = data.columns.get(key);
       if (!col) return;
       const item = items.find((it) => it.keys.length === 1 && it.keys[0] === key);
-      const codes = item ? allCodes(item) : Array.from(distinctValues(col.values)).sort((a, c) => a - c).map((v) => ({ code: v, label: String(v) }));
+      const codes = b.codes ? b.codes : item ? allCodes(item) : Array.from(distinctValues(col.values)).sort((a, c) => a - c).map((v) => ({ code: v, label: String(v) }));
       codes.forEach((c) => {
         const mask = col.values.map((v) => v === c.code);
         if (!mask.some(Boolean) && c.undefinedCode) return;
@@ -680,19 +816,18 @@
 
   function multi01Table(item, data, segs, w, opts) {
     const cols = item.keys.map((k) => colVals(data, k));
-    const hasZero = cols.some((c) => c.some((v) => v === 0));
     const rows = segs.map((seg) => {
       let n = 0;
       let wn = 0;
       const cnt = new Array(cols.length).fill(0);
       for (let i = 0; i < data.n; i++) {
         if (!seg.mask[i]) continue;
-        const answered = hasZero ? cols.some((c) => c[i] != null) : cols.some((c) => c[i] === 1);
-        if (!answered) continue;
+        // 0/1 방식은 0도 응답, 번호/빈칸 방식은 하나라도 선택한 사람이 Base
+        if (!cols.some((c) => c[i] != null)) continue;
         n++;
         wn += w[i];
         cols.forEach((c, j) => {
-          if (c[i] === 1) cnt[j] += w[i];
+          if (c[i] != null && c[i] !== 0) cnt[j] += w[i];
         });
       }
       return { group: seg.group, label: seg.label, isTotal: !!seg.isTotal, n, wn, values: cnt.map((c) => pct(c, wn)) };
@@ -702,12 +837,16 @@
   }
 
   function summaryTable(item, title, labels, rowsList, pick, fmt, opts, note) {
-    const rows = rowsList[0].map((r, s) => ({
-      group: r.group, label: r.label, isTotal: r.isTotal, n: r.n, wn: r.wn,
-      values: rowsList.map((rs) => pick(rs[s])),
-    }));
+    const differ = rowsList.some((rs) => rs[0].n !== rowsList[0][0].n);
+    const rows = rowsList[0].map((r, s) => {
+      // 항목마다 Base가 다르면 가장 큰 Base를 표시
+      const top = rowsList.map((rs) => rs[s]).reduce((a, b) => (b.n > a.n ? b : a));
+      return { group: r.group, label: r.label, isTotal: r.isTotal, n: top.n, wn: top.wn, values: rowsList.map((rs) => pick(rs[s])) };
+    });
     const columns = labels.map((l) => ({ label: l, fmt }));
-    return mkTable(item, title, 'summary', columns, rows, baseNotes(opts, note));
+    const notes = baseNotes(opts, note);
+    if (differ) notes.push('항목마다 응답자(Base)가 달라 사례수는 가장 큰 값을 표시했습니다. 항목별 사례수는 개별 표를 참고하세요.');
+    return mkTable(item, title, 'summary', columns, rows, notes);
   }
 
   /**
@@ -736,6 +875,12 @@
             rowsList.push(r.rows);
             spec = spec || r.spec;
           });
+          const sharedCodes = kind === 'singleset' && item.codes.length >= 2 && item.codes.length <= 3 &&
+            item.keys.every((k) => { const v = data.columns.get(k).values; return v.every((x) => x == null || item.codes.some((c) => c.code === x)); });
+          if (sharedCodes) {
+            const first = item.codes[0];
+            tables.push(summaryTable(item, `${item.title} - 요약: '${first.label}' 비율`, item.itemLabels, rowsList, (r) => r.values[0], 'pct', opts, `항목별 '${first.label}' 응답 비율(%)`));
+          }
           if (kind === 'scaleset' && spec) {
             const kk = spec.k === 2 ? '2' : '1';
             tables.push(summaryTable(item, `${item.title} - 요약: 평균`, item.itemLabels, rowsList, (r) => r.scale.mean, 'mean', opts, `${spec.points}점 척도 평균`));
