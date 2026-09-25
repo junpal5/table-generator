@@ -223,6 +223,94 @@ test('단일응답 묶음 요약표', () => {
   near(sum.rows[0].values[0], 50, '사업A 인지율');
 });
 
+console.log('G-CAII 형식');
+// 사내 G-CAII 코드북과 같은 구조의 작은 가상 예시
+const gBook = {
+  '0000_질문지': [
+    ['문항ID', '문항타입', '보기', '로직', 'page'],
+    ['Q1', '단수응답형 (SIG)', 'SQ1] 활용 수준', '', 1], ['', '', '1]', '', ''], ['', '', '1.높음', '', ''], ['', '', '2.낮음', '', ''],
+    ['Q2', '복수응답형 (MTP)', 'B2] 수집 경로 (중복응답)', '', 2], ['', '', '1.포털', '', ''], ['', '', '2.기관', '', ''], ['', '', '9997.기타', '', ''],
+    ['Q3', '척도형-복수응답형 (MX3)', 'B5] 데이터 활용 경험과 계획', '', 3], ['', '', '1]교통 데이터', '', ''], ['', '', '2]화재 데이터', '', ''], ['', '', '1.활용 경험있음', '', ''], ['', '', '2.향후 활용계획 있음', '', ''],
+    ['Q4', '척도형-멀티형 (MX7)', 'D3] 제도를 알고 계십니까? 이용한 경험이 있으십니까?', '', 4], ['', '', '1]제도A', '', ''], ['', '', '2]제도B', '', ''], ['', '', '1.예', '', ''], ['', '', '2.아니오', '', ''], ['', '', '3.예', '', ''], ['', '', '4.아니오', '', ''],
+    ['Q5', '순위형 (RNK)', 'D4] 필요한 정보 제공 방식', '', 5], ['', '', '1.포털', '', ''], ['', '', '2.메일', '', ''], ['', '', '3.설명회', '', ''],
+    ['Q6', '숫자형 (NUM)', 'C2] 매출액', '', 6], ['', '', '1.총 매출액', '', ''],
+    ['Q7', '자기기입형 (OPN)', 'A1] 기업명', '', 7],
+    ['Q8', '단수응답형 (SIG)', 'B5-1] 세부 활용 여부', '', 8], ['', '', '1.예', '', ''], ['', '', '2.아니오', '', ''],
+  ],
+  'Variable Labels': [
+    ['Variable Labels', '', '문구'],
+    ['SQ1', '활용 수준', null], ['A1O1', '기업명 - ', null],
+    ['B2M1', '수집 경로 (중복응답) - 포털', null], ['B2M2', '수집 경로 (중복응답) - 기관', null], ['B2M9997', '수집 경로 (중복응답) - 기타', ')'],
+    ['B5MT1M1', '데이터 활용 경험과 계획 - 교통 데이터', null], ['B5MT1M2', '데이터 활용 경험과 계획 - 교통 데이터', null],
+    ['B5MT2M1', '데이터 활용 경험과 계획 - 화재 데이터', null], ['B5MT2M2', '데이터 활용 경험과 계획 - 화재 데이터', null],
+    ['D3C1MT1', '제도 - 제도A', null], ['D3C2MT1', '제도 - 제도B', null], ['D3C1MT2', '제도 - 제도A', null], ['D3C2MT2', '제도 - 제도B', null],
+    ['D4R1', '필요한 정보 제공 방식 - 1순위', null], ['D4R2', '필요한 정보 제공 방식 - 2순위', null], ['D4R9997', '필요한 정보 제공 방식 - 기타', ')'],
+    ['C2N1', '매출액 - 총 매출액', '백만원'], ['B5K1', '세부 활용 여부', null],
+  ],
+  'Value Labels': [
+    ['Value Labels', ''],
+    ['/SQ1', ''], ['', "1.'높음'"], ['', "2.'낮음'"],
+    ['/B2M1 B2M2 B2M9997', ''], ['', "1.'포털'"], ['', "2.'기관'"], ['', "9997.'기타'"],
+    ['/B5MT1M1 B5MT1M2 B5MT2M1 B5MT2M2', ''], ['', "1.'활용 경험있음'"], ['', "2.'향후 활용계획 있음'"],
+    ['/D3C1MT1 D3C2MT1 D3C1MT2 D3C2MT2 D3C1MT3', ''], ['', "1.'예'"], ['', "2.'아니오'"], ['', "3.'예'"], ['', "4.'아니오'"],
+    ['/D4R1 D4R2', ''], ['', "1.'포털'"], ['', "2.'메일'"], ['', "3.'설명회'"],
+    ['/B5K1', ''], ['', "1.'예'"], ['', "2.'아니오'"],
+  ],
+};
+const gData = TG.prepareData([
+  ['user_id', 'begin_dt', 'data_지역', 'SQ1', 'A1O1', 'B2M1', 'B2M2', 'B2M9997', 'B2M9997_TXT', 'B5MT1M1', 'B5MT1M2', 'B5MT2M1', 'B5MT2M2', 'D3C1MT1', 'D3C2MT1', 'D3C1MT2', 'D3C2MT2', 'D4R1', 'D4R2', 'D4R9997', 'C2N1', 'B5K1'],
+  [11, '2026-01-01', '서울', 1, '가', 1, null, null, null, 1, null, null, 2, 1, 2, 3, null, 1, 2, null, 100, 1],
+  [12, '2026-01-01', '경기', 2, '나', 1, 2, null, null, null, null, null, null, 2, 2, null, null, 2, 3, null, 300, 2],
+  [13, '2026-01-01', '서울', 1, '다', null, 2, 9997, 'API', 1, 2, 1, null, 1, 1, 4, 3, 3, 1, null, 999999, 1],
+  [14, '2026-01-01', '-', 2, '라', 1, null, null, null, null, 2, null, null, 2, 1, null, 4, 1, 3, null, 200, 2],
+]);
+const gCb = TG.parseCodebookBook(gBook, { format: 'auto' });
+const gItems = TG.buildItems(gCb, gData).items;
+const gv = (v) => gItems.find((i) => i.vars[0] === v);
+test('G-CAII 형식 자동 감지 (INT64로 오인하지 않음)', () => assert.strictEqual(gCb.format, 'gcaii'));
+test('G-CAII 변수명 규칙으로 유형 인식', () => {
+  assert.strictEqual(gv('SQ1').kind, 'single');
+  assert.strictEqual(gv('SQ1').title, 'SQ1. 활용 수준');
+  assert.strictEqual(gv('A1O1').kind, 'exclude');
+  assert.strictEqual(gv('B2M1').kind, 'multi01');
+  assert.deepStrictEqual(gv('B2M1').itemLabels, ['포털', '기관', '기타']);
+  assert.strictEqual(gv('B2M9997_TXT').kind, 'exclude');
+  assert.strictEqual(gv('D4R1').kind, 'rank');
+  assert.deepStrictEqual(gv('D4R1').vars, ['D4R1', 'D4R2']);
+  assert.strictEqual(gv('C2N1').kind, 'numeric');
+  assert.ok(/단위: 백만원/.test(gv('C2N1').title));
+  assert.strictEqual(gv('B5K1').title, 'B5-1. 세부 활용 여부');
+  assert.strictEqual(gv('user_id').kind, 'exclude');
+});
+test('행렬 복수응답(MX3)은 열별로 묶고 전체가 Base', () => {
+  const m1 = gv('B5MT1M1');
+  assert.deepStrictEqual(m1.vars, ['B5MT1M1', 'B5MT2M1']);
+  assert.deepStrictEqual(m1.itemLabels, ['교통 데이터', '화재 데이터']);
+  assert.ok(/활용 경험있음$/.test(m1.title));
+  const t = TG.computeTables([m1], gData, {}).tables[0];
+  assert.strictEqual(t.rows[0].n, 4);
+  near(t.rows[0].values[0], 50, '교통 활용경험');
+});
+test('행렬 멀티(MX7)는 열마다 보기와 제목을 나눔', () => {
+  const c1 = gv('D3C1MT1');
+  const c2 = gv('D3C1MT2');
+  assert.deepStrictEqual(c1.codes.map((c) => c.code), [1, 2]);
+  assert.deepStrictEqual(c2.codes.map((c) => c.code), [3, 4]);
+  assert.strictEqual(c1.title, 'D3. 제도를 알고 계십니까?');
+  assert.strictEqual(c2.title, 'D3. 이용한 경험이 있으십니까?');
+});
+test('숫자 문항의 999999(모름)는 평균에서 제외', () => {
+  const t = TG.computeTables([gv('C2N1')], gData, {}).tables[0];
+  assert.strictEqual(t.rows[0].n, 3);
+  near(t.rows[0].values[0], 200, '평균');
+});
+test('문자로만 된 지역 열을 배너용 보기로 변환', () => {
+  const r = gv('data_지역');
+  assert.strictEqual(r.kind, 'single');
+  assert.strictEqual(r.title, '지역');
+  assert.deepStrictEqual(r.codes.map((c) => c.label), ['경기', '서울']); // '-'는 빈칸 처리
+});
+
 console.log('표 모양');
 test('보고서형/배너형 격자', () => {
   const t = tbl('SQ1. 귀하의 성별은 무엇입니까?');

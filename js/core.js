@@ -209,7 +209,7 @@
   const ID_NAME = /^(id|no|num|seq|번호|연번|일련|resp|sampleid|pid|uid|caseid|serial)(_?\d*)?$/i;
   const WEIGHT_NAME = /^(w|wt|wgt|weight|weights|가중치|가중)(_?\w*)?$/i;
   // 온라인 조사 시스템이 붙이는 관리용 열
-  const SYSTEM_NAME = /^(group_id|start_time|end_time|loi(\(s\))?|loi_sum|access_key|user_agent.*|user_device|is_mobile|ip|data_time|result|last_question|last_before_question|status|duration|panel.*|device|browser)$/i;
+  const SYSTEM_NAME = /^(group_id|start_time|end_time|loi(\(s\))?|loi_sum|access_key|user_agent.*|user_device|is_mobile|ip|data_time|result|last_question|last_before_question|status|duration|panel.*|device|browser|user_id|respond_id|begin_dt|end_dt|page_rspns_path|rspns_.*|ismobilescreen|gbid|rsch_mthd|조사링크)$/i;
 
   function scaleInfo(codes) {
     const valid = codes.filter((c) => !DK_WORD.test(c.label)).sort((a, b) => a.code - b.code);
@@ -221,7 +221,8 @@
   function looksLikeScale(codes) {
     const valid = scaleInfo(codes);
     if (!valid) return false;
-    const hits = valid.filter((c) => SCALE_WORD.test(c.label)).length;
+    // 척도 보기는 짧음("매우 만족", "그런 편이다"). 긴 설명 문장형 보기는 단일응답으로 봄
+    const hits = valid.filter((c) => SCALE_WORD.test(c.label) && c.label.replace(/\s+/g, '').length <= 15).length;
     return hits >= Math.ceil(valid.length / 2);
   }
 
@@ -310,6 +311,26 @@
       .trim();
     if (!s) s = fallback;
     return s.length > 20 ? s.slice(0, 20) + '…' : s;
+  }
+
+  // "-", "." 같은 기호만 있는 칸은 빈칸으로 봄
+  function textValue(t) {
+    const v = str(t);
+    return /^[\s\-–—_.*]*$/.test(v) ? '' : v;
+  }
+
+  // 코드북에 없는 문자 열(예: 지역 "서울", "경기")이 몇 가지 값뿐이면 보기로 바꿔 배너로 쓸 수 있게 함
+  function textCategories(col, data) {
+    if (!col.raw || col.filled < data.n * 0.5) return null;
+    const set = new Set();
+    for (const t of col.raw) {
+      const v = textValue(t);
+      if (!v) continue;
+      set.add(v);
+      if (set.size > 30) return null;
+    }
+    if (set.size < 2 || set.size > Math.max(2, col.filled / 5)) return null;
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ko'));
   }
 
   // 코드북에 없는 숫자 변수의 보기 이름을, 1:1로 대응하는 문자 열에서 찾아옵니다.
@@ -513,6 +534,7 @@
           extraCodes: kind === 'multi01' ? [] : addUnknownCodes(codes, keys),
           include: kind !== 'exclude',
           isGroup: true,
+          baseAll: keys.some((k) => cbOf(k).baseAll),
         });
         return;
       }
@@ -537,6 +559,13 @@
           kind = 'weight'; reason = '변수명이 가중치 형태';
         } else if (SYSTEM_NAME.test(col.name)) {
           kind = 'exclude'; reason = '조사 시스템 관리 변수';
+        } else if (col.isText && !inCodebook && textCategories(col, data)) {
+          const cats = textCategories(col, data);
+          kind = 'single'; reason = '문자 값을 보기로 변환';
+          codes = cats.map((label, i) => ({ code: i + 1, label }));
+          const idx = new Map(cats.map((label, i) => [label, i + 1]));
+          col.values = col.raw.map((t) => (textValue(t) ? idx.get(textValue(t)) : null));
+          cb.question = cb.question || col.name.replace(/^data_/i, '');
         } else if (col.isText) {
           kind = 'exclude'; reason = '문자(개방형) 응답';
         } else if (ID_NAME.test(col.name)) {
@@ -581,6 +610,14 @@
         include: include && !['exclude', 'weight'].includes(kind),
         isGroup: false,
       });
+    });
+
+    // 개인정보 동의·연락처·패널 참여 같은 관리용 문항은 기본으로 표를 만들지 않음
+    items.forEach((it) => {
+      if (it.include && /개인정보|연락처|성함|성명|e-?mail|이메일|답례품|패널\s*조사/i.test(it.title)) {
+        it.include = false;
+        it.reason += ' · 관리용 문항으로 보여 기본 제외';
+      }
     });
 
     // 같은 제목의 표가 여러 개면 변수명을 붙여 구분
@@ -754,8 +791,12 @@
     return { table: mkTable(item, title, forceScale ? 'scale' : 'single', columns, rows, notes), spec, rows };
   }
 
+  // 9999, 99999, 999999 … 처럼 9로만 된 큰 값은 "모름/무응답" 코드로 보고 평균에서 제외
+  const NINES = /^9{4,}$/;
   function numericTable(item, data, segs, w, opts) {
-    const vals = colVals(data, item.keys[0]);
+    const raw = colVals(data, item.keys[0]);
+    const dk = raw.filter((v) => v != null && NINES.test(String(v))).length;
+    const vals = dk ? raw.map((v) => (v != null && NINES.test(String(v)) ? null : v)) : raw;
     const rows = segs.map((seg) => {
       const xs = [];
       let n = 0;
@@ -783,7 +824,9 @@
       return { group: seg.group, label: seg.label, isTotal: !!seg.isTotal, n, wn: sw, values: [mean, sd, xs[0][0], med, xs[xs.length - 1][0]] };
     });
     const columns = ['평균', '표준편차', '최솟값', '중앙값', '최댓값'].map((l) => ({ label: l, fmt: 'mean' }));
-    return mkTable(item, item.title, 'numeric', columns, rows, baseNotes(opts, 'Base: 해당 문항 응답자'));
+    const notes = baseNotes(opts, 'Base: 해당 문항 응답자');
+    if (dk) notes.push(`9999·999999 등 모름/무응답 코드 ${dk}건은 계산에서 제외했습니다.`);
+    return mkTable(item, item.title, 'numeric', columns, rows, notes);
   }
 
   // 여러 변수 중 하나라도 해당 코드를 가진 응답자 비율 (순위 종합/복수 코드형)
@@ -823,7 +866,8 @@
       for (let i = 0; i < data.n; i++) {
         if (!seg.mask[i]) continue;
         // 0/1 방식은 0도 응답, 번호/빈칸 방식은 하나라도 선택한 사람이 Base
-        if (!cols.some((c) => c[i] != null)) continue;
+        // (행렬형 복수응답처럼 아무것도 선택하지 않을 수 있는 문항은 전체가 Base)
+        if (!item.baseAll && !cols.some((c) => c[i] != null)) continue;
         n++;
         wn += w[i];
         cols.forEach((c, j) => {
@@ -833,7 +877,7 @@
       return { group: seg.group, label: seg.label, isTotal: !!seg.isTotal, n, wn, values: cnt.map((c) => pct(c, wn)) };
     });
     const columns = item.itemLabels.map((l) => ({ label: l, fmt: 'pct' }));
-    return mkTable(item, item.title, 'multi', columns, rows, baseNotes(opts, 'Base: 해당 문항 응답자, 복수응답(합계 100% 초과 가능)'));
+    return mkTable(item, item.title, 'multi', columns, rows, baseNotes(opts, `Base: ${item.baseAll ? '전체 응답자' : '해당 문항 응답자'}, 복수응답(합계 100% 초과 가능)`));
   }
 
   function summaryTable(item, title, labels, rowsList, pick, fmt, opts, note) {
@@ -878,8 +922,10 @@
           const sharedCodes = kind === 'singleset' && item.codes.length >= 2 && item.codes.length <= 3 &&
             item.keys.every((k) => { const v = data.columns.get(k).values; return v.every((x) => x == null || item.codes.some((c) => c.code === x)); });
           if (sharedCodes) {
-            const first = item.codes[0];
-            tables.push(summaryTable(item, `${item.title} - 요약: '${first.label}' 비율`, item.itemLabels, rowsList, (r) => r.values[0], 'pct', opts, `항목별 '${first.label}' 응답 비율(%)`));
+            // 예/아니오 → '예' 요약, 현재 활용/향후 계획/해당 없음 → 앞의 두 보기 요약
+            item.codes.slice(0, -1).forEach((c, ci) => {
+              tables.push(summaryTable(item, `${item.title} - 요약: '${c.label}' 비율`, item.itemLabels, rowsList, (r) => r.values[ci], 'pct', opts, `항목별 '${c.label}' 응답 비율(%)`));
+            });
           }
           if (kind === 'scaleset' && spec) {
             const kk = spec.k === 2 ? '2' : '1';

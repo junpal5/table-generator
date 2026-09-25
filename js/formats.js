@@ -36,6 +36,46 @@
     return { name, question: '', codes: [], type: '', group: '', groupTitle: '', itemLabel: '' };
   }
 
+  // HTML 흔적(&#39;, <br>)과 줄바꿈 정리
+  function cleanText(s) {
+    return str(s)
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&#39;|&apos;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // SPSS 문법 형태의 Value Labels 시트: "/변수1 변수2" 다음 줄부터 "1 '보기'" 또는 "1.'보기'"
+  function readSpssValueLabels(rows, get) {
+    let current = [];
+    (rows || []).forEach((r) => {
+      const cells = (r || []).map(str);
+      const head = cells.find((c) => c.startsWith('/'));
+      if (head) {
+        current = Array.from(new Set(head.slice(1).trim().split(/\s+/).filter(Boolean)));
+        current.forEach((n) => get(n));
+        return;
+      }
+      for (const c of cells) {
+        const m = /^(-?\d+(?:\.\d+)?)\s*[.:]?\s*['"]([\s\S]*)['"]\s*\.?$/.exec(c);
+        if (!m) continue;
+        const code = Number(m[1]);
+        const label = cleanText(m[2]);
+        current.forEach((n) => {
+          const v = get(n);
+          if (!v.codes.some((x) => x.code === code)) v.codes.push({ code, label });
+        });
+        break;
+      }
+    });
+  }
+
   // ------------------------------------------------------------------
   // 1) 표준 양식 (변수명 | 문항 | 코드 | 레이블 | 유형 | 그룹)
   // ------------------------------------------------------------------
@@ -79,8 +119,6 @@
   function int64Detect(sheets) {
     let score = 0;
     if (findSheet(sheets, /^guide2$/i)) score += 5;
-    if (findSheet(sheets, /^value\s*labels$/i)) score += 3;
-    if (findSheet(sheets, /^variable\s*labels$/i)) score += 3;
     const g = findSheet(sheets, /^guide$/i);
     if (g && (sheets[g] || []).some((r) => r && /^(RADIO|CHECK|HCHECK|GRADE_CLICK|RADIOSETS)$/.test(str(r[3])))) score += 5;
     return score >= 5 ? 10 : 0;
@@ -137,28 +175,7 @@
 
     // --- Value Labels: "/A2_1_1 A2_1_2" 다음 줄부터 "1 '특허권'"
     const vlName = findSheet(sheets, /^value\s*labels$/i);
-    if (vlName) {
-      let current = [];
-      sheets[vlName].forEach((r) => {
-        const cells = (r || []).map(str);
-        const head = cells.find((c) => c.startsWith('/'));
-        if (head) {
-          current = head.slice(1).trim().split(/\s+/).filter(Boolean);
-          current.forEach((n) => get(n));
-          return;
-        }
-        for (const c of cells) {
-          const m = /^(-?\d+(?:\.\d+)?)\s+['"](.*)['"]\s*\.?$/.exec(c);
-          if (!m) continue;
-          const code = Number(m[1]);
-          current.forEach((n) => {
-            const v = get(n);
-            if (!v.codes.some((x) => x.code === code)) v.codes.push({ code, label: m[2].trim() });
-          });
-          break;
-        }
-      });
-    }
+    if (vlName) readSpssValueLabels(sheets[vlName], get);
 
     // --- Variable Labels: 변수명 | ' 문항 - 항목'
     const vbName = findSheet(sheets, /^variable\s*labels$/i);
@@ -260,6 +277,201 @@
   });
 
   // ------------------------------------------------------------------
+  // 3) G-CAII (사내 조사 시스템)
+  //    시트: 질문지(문항ID | 문항타입 | 보기 | 로직 | page) / Variable Labels / Value Labels
+  //    변수명 규칙(질문번호 뒤에 붙는 기호)
+  //      M숫자 = 복수응답, MT숫자 = 행렬 문항의 행, MT숫자M숫자 = 행렬 복수응답,
+  //      C숫자MT숫자 = 행렬 멀티, R숫자 = 순위, N숫자 = 숫자, O/P/E = 주관식·전화·메일,
+  //      9997 = 기타, 9999 = 모름, 질문번호의 '-'는 'K' (B5-1 → B5K1)
+  // ------------------------------------------------------------------
+  function gcaiiQuestionSheet(sheets) {
+    return Object.keys(sheets).find((n) => {
+      const h = (sheets[n] || [])[0] || [];
+      return headerIndex(h, /^문항\s*ID$/i) >= 0 && headerIndex(h, /^문항\s*타입$/) >= 0;
+    });
+  }
+
+  function gcaiiDetect(sheets) {
+    let score = 0;
+    if (gcaiiQuestionSheet(sheets)) score += 6;
+    if (findSheet(sheets, /^value\s*labels$/i)) score += 2;
+    if (findSheet(sheets, /^variable\s*labels$/i)) score += 2;
+    return score >= 6 ? 10 : 0;
+  }
+
+  const GCAII_QTYPE = {
+    SIG: '', // 단수응답: 보기로 단일/척도 판단
+    MTP: 'multi01',
+    MX1: '',
+    MX3: 'multi01',
+    MX7: '',
+    RNK: 'rank',
+    NUM: 'numeric',
+    NUD: 'numeric',
+    OPN: 'exclude',
+    TEL: 'exclude',
+    EML: 'exclude',
+    MSG: 'exclude',
+  };
+
+  function gcaiiParse(sheets) {
+    const vars = new Map();
+    const order = [];
+    const warnings = [];
+    const get = (name) => {
+      const key = keyOf(name);
+      if (!vars.has(key)) {
+        vars.set(key, newVar(str(name)));
+        order.push(key);
+      }
+      return vars.get(key);
+    };
+
+    // --- 질문지: 질문번호("B5-1]")와 문항타입, 행렬 문항의 행 이름("1]교통카드 …")
+    const questions = [];
+    const qName = gcaiiQuestionSheet(sheets);
+    if (qName) {
+      const rows = sheets[qName];
+      const h = rows[0];
+      const ci = { id: headerIndex(h, /^문항\s*ID$/i), type: headerIndex(h, /^문항\s*타입$/), text: headerIndex(h, /^보기$/) };
+      if (ci.text < 0) ci.text = 2;
+      let cur = null;
+      rows.slice(1).forEach((r) => {
+        if (!r) return;
+        const text = cleanText(r[ci.text]);
+        if (str(r[ci.id])) {
+          const m = /^\s*([A-Za-z]+[0-9A-Za-z-]*)\]\s*([\s\S]*)$/.exec(text);
+          const t = /\(([A-Z0-9]+)\)\s*$/.exec(str(r[ci.type]));
+          cur = null;
+          if (!m) return;
+          cur = { code: m[1], base: m[1].replace(/-/g, 'K').toUpperCase(), text: m[2].trim(), qtype: t ? t[1] : '', rows: [], codes: [] };
+          questions.push(cur);
+          return;
+        }
+        if (!cur) return;
+        let m = /^(\d+)\](.+)$/.exec(text);
+        if (m) {
+          cur.rows.push({ n: Number(m[1]), label: m[2].trim() });
+          return;
+        }
+        m = /^(-?\d+)\.(.*)$/.exec(text);
+        if (m) cur.codes.push({ code: Number(m[1]), label: m[2].trim() });
+      });
+    }
+    // 긴 질문번호부터 맞춰 봄 (B5K1 이 B5 보다 먼저)
+    const byLen = questions.slice().sort((a, b) => b.base.length - a.base.length);
+    const questionOf = (name) => {
+      const up = name.toUpperCase();
+      return byLen.find((q) => up.startsWith(q.base) && (up.length === q.base.length || /[A-Z]/.test(up[q.base.length])));
+    };
+
+    // --- Variable Labels: 변수명 | 문항 - 항목 | 단위/문구
+    const vbName = findSheet(sheets, /^variable\s*labels$/i);
+    const units = new Map();
+    if (vbName) {
+      sheets[vbName].slice(1).forEach((r) => {
+        const name = str(r && r[0]);
+        if (!name || name.startsWith('.')) return;
+        const v = get(name);
+        const label = cleanText(r[1]);
+        if (label && !v.question) v.question = label.replace(/\s*-\s*_+\s*$/, '').replace(/\s*-\s*$/, '');
+        const unit = cleanText(str(r[2]).split(/<br/i)[0]);
+        if (unit && unit.length <= 10 && !/^[)\s]+$/.test(unit) && !/^※/.test(unit)) units.set(v.name, unit);
+      });
+    }
+
+    // --- Value Labels
+    const vlName = findSheet(sheets, /^value\s*labels$/i);
+    if (vlName) readSpssValueLabels(sheets[vlName], get);
+
+    // --- 변수명 규칙으로 유형·묶음 정하기
+    const mx7cols = new Map(); // 행렬 멀티 문항의 열 개수
+    vars.forEach((v) => {
+      const q = questionOf(v.name);
+      const up = v.name.toUpperCase();
+      const rest = q ? up.slice(q.base.length) : '';
+      const qtype = q ? q.qtype : '';
+      const prefix = q ? `${q.code}. ` : '';
+      let m;
+      if (v.question && prefix) v.question = prefix + v.question;
+      if (!q) return;
+      if (/_TXT$/i.test(up) || /9997$/.test(rest) && /^(R|N|O)/.test(rest) || /N9999$/.test(rest)) {
+        v.type = 'exclude';
+      } else if (/^[OPE]\d+$/.test(rest)) {
+        v.type = 'exclude';
+      } else if ((m = /^MT(\d+)M(\d+)$/.exec(rest))) {
+        // 행렬 복수응답: 같은 열(M숫자)끼리 묶어서 행(자료 이름)을 항목으로
+        const col = Number(m[2]);
+        const colLabel = (q.codes.find((c) => c.code === col) || {}).label || `응답 ${col}`;
+        const row = q.rows.find((x) => x.n === Number(m[1]));
+        v.type = 'multi01';
+        v.group = `${q.base}MT*M${col}`;
+        v.groupTitle = `${prefix}${q.text} - ${colLabel}`;
+        if (row) v.itemLabel = row.label;
+        v.baseAll = true;
+      } else if ((m = /^C(\d+)MT(\d+)$/.exec(rest))) {
+        // 행렬 멀티: 같은 열(MT숫자)끼리 묶어서 행(C숫자)을 항목으로
+        const col = Number(m[2]);
+        const row = q.rows.find((x) => x.n === Number(m[1]));
+        // 열 개수는 Variable Labels에 실제로 있는 변수로만 셈 (Value Labels에는 없는 변수도 섞여 있음)
+        if (v.question) mx7cols.set(q.base, Math.max(mx7cols.get(q.base) || 0, col));
+        v.type = '';
+        v.group = `${q.base}C*MT${col}`;
+        v.mx7 = { q, col };
+        if (row) v.itemLabel = row.label;
+      } else if ((m = /^MT(\d+)$/.exec(rest))) {
+        const row = q.rows.find((x) => x.n === Number(m[1]));
+        v.type = '';
+        v.group = `${q.base}MT`;
+        v.groupTitle = prefix + q.text;
+        if (row) v.itemLabel = row.label;
+      } else if (/^M\d+$/.test(rest)) {
+        v.type = 'multi01';
+        v.group = `${q.base}M`;
+        v.groupTitle = prefix + q.text;
+        const hit = /(\d+)$/.exec(rest) && v.codes.find((c) => c.code === Number(/(\d+)$/.exec(rest)[1]));
+        if (hit) v.itemLabel = hit.label;
+      } else if (/^R\d+$/.test(rest)) {
+        v.type = 'rank';
+        v.group = `${q.base}R`;
+        v.groupTitle = prefix + q.text;
+      } else if (/^N\d+$/.test(rest)) {
+        v.type = 'numeric';
+        v.codes = [];
+      } else {
+        v.type = GCAII_QTYPE[qtype] != null ? GCAII_QTYPE[qtype] : '';
+        if (v.type === 'numeric') v.codes = [];
+      }
+      if (v.type === 'numeric' && units.has(v.name)) v.question += ` (단위: ${units.get(v.name)})`;
+    });
+
+    // 행렬 멀티(MX7): 보기(1 예, 2 아니오, 3 예, 4 아니오)를 열마다 나누고, 열 제목은 질문 문장에서
+    vars.forEach((v) => {
+      if (!v.mx7) return;
+      const { q, col } = v.mx7;
+      const ncol = mx7cols.get(q.base) || 1;
+      const all = (q.codes.length ? q.codes : v.codes).slice().sort((a, b) => a.code - b.code);
+      const per = Math.floor(all.length / ncol);
+      if (per >= 2 && per * ncol === all.length) v.codes = all.slice((col - 1) * per, col * per);
+      const sentences = q.text.split(/(?<=[?？])\s*/).map((x) => x.trim()).filter(Boolean);
+      const colTitle = sentences.length === ncol ? sentences[col - 1] : `${q.text} [응답 ${col}]`;
+      v.groupTitle = `${q.code}. ${colTitle}`;
+      delete v.mx7;
+    });
+
+    if (!questions.length) warnings.push('G-CAII 질문지 시트에서 문항을 찾지 못했습니다.');
+    return { vars, warnings, format: 'gcaii' };
+  }
+
+  registerFormat({
+    id: 'gcaii',
+    name: 'G-CAII',
+    usesSheet: false,
+    detect: gcaiiDetect,
+    parse: gcaiiParse,
+  });
+
+  // ------------------------------------------------------------------
   // 형식 자동 감지 + 읽기
   //   sheets: { 시트이름: 2차원 배열 }
   //   opts: { format: 'auto' | 형식 id, sheet: 표준 양식에서 쓸 시트 }
@@ -286,6 +498,6 @@
     return res;
   }
 
-  Object.assign(TG, { FORMATS, registerFormat, detectFormat, parseCodebookBook });
+  Object.assign(TG, { FORMATS, registerFormat, detectFormat, parseCodebookBook, cleanText });
   if (typeof module !== 'undefined' && module.exports) module.exports = TG;
 })(typeof window !== 'undefined' ? window : globalThis);
