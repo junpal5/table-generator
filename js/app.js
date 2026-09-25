@@ -392,22 +392,25 @@
     $('step4').scrollIntoView({ behavior: 'smooth' });
   }
 
-  async function saveExcel() {
+  async function saveAs(btnId, label, what, run) {
     if (!state.result) return;
-    const btn = $('btnExcel');
+    const btn = $(btnId);
     btn.disabled = true;
     btn.textContent = '저장 중…';
     try {
       const base = (state.files.data.name || '데이터').replace(/\.[^.]+$/, '');
-      await TG.downloadExcel(state.result, state.opts, `${base}_통계표.xlsx`);
+      await run(`${base}_통계표`);
     } catch (e) {
       console.error(e);
-      alert('엑셀 저장 중 오류가 났습니다: ' + e.message);
+      alert(`${what} 저장 중 오류가 났습니다: ` + e.message);
     } finally {
       btn.disabled = false;
-      btn.textContent = '엑셀로 저장';
+      btn.textContent = label;
     }
   }
+
+  const saveExcel = () => saveAs('btnExcel', '엑셀로 저장', '엑셀', (base) => TG.downloadExcel(state.result, state.opts, `${base}.xlsx`));
+  const saveHwpx = () => saveAs('btnHwpx', '한글로 저장', '한글', (base) => TG.downloadHwpx(state.result, state.opts, `${base}.hwpx`));
 
   // ------------------------------------------------------------------
   $('cbFormat').innerHTML += TG.FORMATS.map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
@@ -420,4 +423,5 @@
   $('btnSample').addEventListener('click', loadSamples);
   $('btnRun').addEventListener('click', run);
   $('btnExcel').addEventListener('click', saveExcel);
+  $('btnHwpx').addEventListener('click', saveHwpx);
 })();
