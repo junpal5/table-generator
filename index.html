@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>설문 통계표 생성기</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect width=%2716%27 height=%2716%27 rx=%273%27 fill=%27%232459c9%27/%3E%3Cpath d=%27M3 5h10M3 8h10M3 11h10M7 3v10%27 stroke=%27white%27/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <h1>설문 통계표 생성기</h1>
+      <p class="sub">데이터와 코드북을 올리면 문항 유형을 자동으로 인식해 통계표를 만듭니다.
+        <span class="lock">🔒 파일은 서버로 전송되지 않고 이 브라우저 안에서만 처리됩니다.</span></p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- 1단계 -->
+    <section class="card" id="step1">
+      <h2><span class="step">1</span> 파일 올리기</h2>
+      <div class="uploads">
+        <div class="drop" id="dropData">
+          <input type="file" id="fileData" accept=".xlsx,.xls,.csv">
+          <strong>데이터 파일</strong>
+          <span class="hint">.xlsx / .xls / .csv · 1행 = 변수명</span>
+          <span class="fname" id="nameData">클릭하거나 파일을 끌어다 놓으세요</span>
+          <select id="sheetData" class="hidden" aria-label="데이터 시트 선택"></select>
+        </div>
+        <div class="drop" id="dropCb">
+          <input type="file" id="fileCb" accept=".xlsx,.xls,.csv">
+          <strong>코드북</strong>
+          <span class="hint">변수명 · 문항 · 코드 · 레이블</span>
+          <span class="fname" id="nameCb">클릭하거나 파일을 끌어다 놓으세요</span>
+          <select id="sheetCb" class="hidden" aria-label="코드북 시트 선택"></select>
+        </div>
+      </div>
+      <div class="row gap small fmt">
+        <label>코드북 형식
+          <select id="cbFormat">
+            <option value="auto">자동 감지</option>
+          </select>
+        </label>
+        <span id="fmtInfo" class="hint"></span>
+      </div>
+      <div class="row gap">
+        <button class="btn primary" id="btnAnalyze" disabled>문항 자동 인식</button>
+        <button class="btn ghost" id="btnSample">예시 파일로 해보기</button>
+        <span class="links">내려받기:
+          <a href="samples/코드북_양식.xlsx" download>코드북 양식</a> ·
+          <a href="samples/예시_코드북.xlsx" download>예시 코드북</a> ·
+          <a href="samples/예시_데이터.xlsx" download>예시 데이터</a>
+        </span>
+      </div>
+      <div id="msg1" class="msg hidden"></div>
+    </section>
+
+    <!-- 2단계 -->
+    <section class="card hidden" id="step2">
+      <h2><span class="step">2</span> 문항 확인</h2>
+      <p class="desc">자동으로 인식한 결과입니다. <b>유형</b>이 틀렸으면 바꾸고, 표로 만들 필요 없는 문항은 체크를 해제하세요. 표 제목도 고칠 수 있습니다.</p>
+      <div id="warnings" class="warn hidden"></div>
+      <div class="row gap small">
+        <span id="itemSummary"></span>
+        <span class="spacer"></span>
+        <button class="btn tiny" id="checkAll">모두 선택</button>
+        <button class="btn tiny" id="uncheckAll">모두 해제</button>
+      </div>
+      <div class="scroll items">
+        <table class="grid" id="itemTable">
+          <thead><tr><th>포함</th><th>변수</th><th>표 제목</th><th>유형</th><th>인식 근거</th><th>보기/항목</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 3단계 -->
+    <section class="card hidden" id="step3">
+      <h2><span class="step">3</span> 표 설정</h2>
+      <div class="opts">
+        <div class="opt">
+          <h4>배너(교차 기준)</h4>
+          <p class="desc">체크한 순서대로 전체 옆(또는 아래)에 붙습니다. 이름은 표에 표시될 이름입니다.</p>
+          <div id="bannerList" class="bannerlist"></div>
+        </div>
+        <div class="opt">
+          <h4>가중치</h4>
+          <label class="chk"><input type="checkbox" id="useWeight"> 가중치 적용</label>
+          <select id="weightVar" disabled></select>
+          <div id="baseModeBox" class="sub-opt hidden">
+            <span>사례수 표시</span>
+            <label><input type="radio" name="baseMode" value="raw" checked> 가중 전</label>
+            <label><input type="radio" name="baseMode" value="weighted"> 가중 후</label>
+            <label><input type="radio" name="baseMode" value="both"> 둘 다</label>
+          </div>
+
+          <h4>표 모양</h4>
+          <label class="radio"><input type="radio" name="orient" value="row" checked> 보고서형 <small>(행: 전체·배너 / 열: 보기)</small></label>
+          <label class="radio"><input type="radio" name="orient" value="col"> 배너형 <small>(열: 전체·배너 / 행: 보기)</small></label>
+
+          <h4>기타</h4>
+          <label>소수점 자리수
+            <select id="decimals"><option value="0">0</option><option value="1" selected>1</option><option value="2">2</option></select>
+          </label>
+          <label class="chk"><input type="checkbox" id="showSum" checked> '계(100%)' 열 표시</label>
+          <label>엑셀 시트
+            <select id="sheetMode"><option value="one">한 시트에 모든 표</option><option value="each">표마다 시트 따로</option></select>
+          </label>
+        </div>
+      </div>
+      <div class="row gap">
+        <button class="btn primary big" id="btnRun">표 만들기</button>
+      </div>
+    </section>
+
+    <!-- 4단계 -->
+    <section class="card hidden" id="step4">
+      <div class="row gap">
+        <h2><span class="step">4</span> 결과 <small id="resultInfo"></small></h2>
+        <span class="spacer"></span>
+        <button class="btn primary" id="btnExcel">엑셀로 저장</button>
+      </div>
+      <div class="result">
+        <nav id="toc" class="toc"></nav>
+        <div id="tables" class="tables"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="wrap foot">설문 통계표 생성기 · 모든 계산은 사용자의 브라우저에서 이루어집니다.</footer>
+
+  <script src="lib/xlsx.full.min.js"></script>
+  <script src="lib/exceljs.min.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/formats.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/export.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
