@@ -750,16 +750,24 @@
     const posLow = /(매우|아주|항상).{0,3}(그렇다|만족|동의|중요|좋|필요|찬성|높|편리|적절|도움)/.test(lowLab) && !/않|불|없/.test(lowLab);
     const negHigh = /(전혀|매우\s*(불|나쁘|낮|반대)|아주\s*(불|나쁘))/.test(highLab);
     const positiveHigh = !(posLow || negHigh);
-    const k = valid.length >= 4 ? 2 : 1;
     const ordered = valid.map((c) => c.code); // 오름차순
-    const topCodes = positiveHigh ? ordered.slice(-k) : ordered.slice(0, k);
-    const botCodes = positiveHigh ? ordered.slice(0, k) : ordered.slice(-k);
+    // 11점 척도(0~10점 등)는 아래 4점 / 가운데 3점 / 위 4점 (예: 0~3 / 4~6 / 7~10)
+    // 그 밖의 척도는 Top2/Bottom2 (3점 척도는 Top1/Bottom1)
+    const k = valid.length === 11 ? 4 : valid.length >= 4 ? 2 : 1;
+    const lowEnd = ordered.slice(0, k);
+    const highEnd = ordered.slice(-k);
+    const topCodes = positiveHigh ? highEnd : lowEnd;
+    const botCodes = positiveHigh ? lowEnd : highEnd;
+    const range = (codes) => `${codes[0]}~${codes[codes.length - 1]}점`;
     return {
       min, max, k, positiveHigh,
       points: valid.length,
       validSet: new Set(ordered),
       topSet: new Set(topCodes),
       botSet: new Set(botCodes),
+      // 표에 쓰는 이름: "긍정(Top2)" 또는 11점 척도는 "긍정(7~10점)"
+      topName: valid.length === 11 ? `긍정(${range(topCodes)})` : `긍정(Top${k})`,
+      botName: valid.length === 11 ? `부정(${range(botCodes)})` : `부정(Bottom${k})`,
     };
   }
 
@@ -786,9 +794,8 @@
       rows.forEach((r) => r.values.push(r.wn > 0 ? r.values.reduce((a, b) => a + (b || 0), 0) : null));
     }
     if (spec) {
-      const kk = spec.k === 2 ? '2' : '1';
-      columns.push({ label: `긍정(Top${kk})`, fmt: 'pct', isStat: true });
-      columns.push({ label: `부정(Bottom${kk})`, fmt: 'pct', isStat: true });
+      columns.push({ label: spec.topName, fmt: 'pct', isStat: true });
+      columns.push({ label: spec.botName, fmt: 'pct', isStat: true });
       columns.push({ label: '평균', fmt: 'mean', isStat: true });
       columns.push({ label: '100점 환산', fmt: 'mean1', isStat: true });
       rows.forEach((r) => r.values.push(r.scale.top, r.scale.bot, r.scale.mean, r.scale.score));
@@ -971,10 +978,9 @@
             });
           }
           if (kind === 'scaleset' && spec) {
-            const kk = spec.k === 2 ? '2' : '1';
             tables.push(summaryTable(item, `${item.title} - 요약: 평균`, item.itemLabels, rowsList, (r) => r.scale.mean, 'mean', opts, `${spec.points}점 척도 평균`));
             tables.push(summaryTable(item, `${item.title} - 요약: 100점 환산`, item.itemLabels, rowsList, (r) => r.scale.score, 'mean1', opts, '100점 환산 점수'));
-            tables.push(summaryTable(item, `${item.title} - 요약: 긍정(Top${kk}) 비율`, item.itemLabels, rowsList, (r) => r.scale.top, 'pct', opts, `긍정 응답(Top${kk}) 비율(%)`));
+            tables.push(summaryTable(item, `${item.title} - 요약: ${spec.topName} 비율`, item.itemLabels, rowsList, (r) => r.scale.top, 'pct', opts, `${spec.topName} 응답 비율(%)`));
           }
         } else if (kind === 'multi01') {
           tables.push(multi01Table(item, data, segs, w, opts));
@@ -1008,6 +1014,7 @@
     KINDS, SINGLE_KINDS, GROUP_KINDS, SORTABLE_KINDS, canSort,
     str, toNum, keyOf, normType, shortName,
     parseInlineCodes, parseCodebook, prepareData, buildItems, computeTables,
+    scaleSpec, allCodes, NINES,
   });
 
   if (typeof module !== 'undefined' && module.exports) module.exports = TG;

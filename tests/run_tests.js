@@ -8,6 +8,7 @@ require('../js/render.js');
 globalThis.JSZip = require('jszip');
 require('../js/hwpx-template.js');
 require('../js/export-hwpx.js');
+require('../js/export-spss.js');
 
 const SAMPLES = path.join(__dirname, '..', 'samples');
 const rows = (f) => {
@@ -457,6 +458,82 @@ test('HWPX 압축 파일: mimetype이 맨 앞·무압축', async () => {
   const zip = await globalThis.JSZip.loadAsync(bytes);
   assert.ok(zip.file('Contents/section0.xml') && zip.file('Contents/header.xml') && zip.file('Contents/content.hpf'));
 });
+
+console.log('11점 척도 묶음');
+test('11점 척도(0~10점)는 0~3 / 4~6 / 7~10으로 묶음 (화면·신택스 같은 기준)', () => {
+  const t = TG.computeTables([iv('A6_2')], int64Data, {}).tables[0];
+  const labels = t.columns.map((c) => c.label);
+  assert.ok(labels.includes('긍정(7~10점)') && labels.includes('부정(0~3점)'), labels.join(','));
+  // 값 5, 8, 10, 0 → 긍정(7~10) 2명, 부정(0~3) 1명
+  near(t.rows[0].values[labels.indexOf('긍정(7~10점)')], 50, '긍정');
+  near(t.rows[0].values[labels.indexOf('부정(0~3점)')], 25, '부정');
+  const s = TG.buildSyntax(TG.computeTables([iv('A6_2')], int64Data, {}), [iv('A6_2')], int64Data, {});
+  assert.ok(s.includes('RECODE G_A6_2(0 1 2 3=21)(4 5 6=22)(7 8 9 10=23)(ELSE=SYSMIS).'));
+  assert.ok(s.includes("21 '⊙ 부정(0~3점)'") && s.includes("22 '⊙ 보통(4~6점)'") && s.includes("23 '⊙ 긍정(7~10점)'"));
+});
+test('5점 척도는 그대로 Top2/Bottom2', () => {
+  const t = TG.computeTables([items.find((i) => i.vars[0] === 'Q1')], data, {}).tables[0];
+  assert.ok(t.columns.some((c) => c.label === '긍정(Top2)') && t.columns.some((c) => c.label === '부정(Bottom2)'));
+});
+
+console.log('SPSS 신택스');
+{
+  const sOpts = { banners: [{ var: 'SQ1', label: '성별', codes: items.find((i) => i.vars[0] === 'SQ1').codes }], weightVar: 'wt', decimals: 1 };
+  const sRes = TG.computeTables(items, data, sOpts);
+  const sps = TG.buildSyntax(sRes, items, data, sOpts);
+  test('표마다 TABLE 명령 하나, 번호·제목이 화면과 같음', () => {
+    const nos = (sps.match(/^\* NO=(\d+)\.\r?$/gm) || []).map((x) => Number(x.match(/\d+/)[0]));
+    assert.deepStrictEqual(nos, sRes.tables.map((t) => t.no));
+    assert.strictEqual((sps.match(/^TABLE\r?$/gm) || []).length, sRes.tables.length + 1); // + 응답자 특성
+    sRes.tables.forEach((t) => assert.ok(sps.includes(`"표 ${t.no}. `), `표 ${t.no} 제목 없음`));
+  });
+  test('파일 경로·저장 명령은 넣지 않음, 가중치는 WEIGHT BY', () => {
+    assert.ok(!/^\s*(CD|GET FILE|SAVE|XSAVE)\b/im.test(sps));
+    assert.ok(!/OUTFILE/i.test(sps));
+    assert.ok(/^WEIGHT BY wt\.\r?$/m.test(sps));
+    assert.ok(/^EXECUTE\.\r?$/m.test(sps));
+  });
+  test('사내 형식: 배너 T_/V_ 정의, /PTO·/STA·/CORNER', () => {
+    assert.ok(sps.includes('COMPUTE T_SQ1=SQ1.') && sps.includes('COMPUTE V_SQ1=SQ1.'));
+    assert.ok(sps.includes("VALUE LABEL T_SQ1 V_SQ1"));
+    assert.ok(sps.includes("/PTO=T1'■ 전      체 ■' T2''/FTO=T3'계'"));
+    assert.ok(sps.includes("/TAB=T1+T_SQ1 BY T2+SQ2+T3"));
+    assert.ok(sps.includes("CPC(SQ2(F4.1)'%':T_SQ1)"));
+    assert.ok(sps.includes('/CORNER="BASE=전체"'));
+  });
+  test('복수응답(0/1)은 /MDG, 순위 종합은 /MRG, 척도는 평균·100점·긍정/부정 묶음', () => {
+    assert.ok(sps.includes("/MDG=M''Q3_1 Q3_2 Q3_3 Q3_4 Q3_5 Q3_6"));
+    assert.ok(sps.includes("/MRG=M''Q4_1 Q4_2"));
+    assert.ok(sps.includes('IF (Q1 GE 1 AND Q1 LE 5) AA_Q1=Q1.'));
+    assert.ok(sps.includes('IF (Q1 GE 1 AND Q1 LE 5) Y_Q1=(AA_Q1-1)*100/4.'));
+    assert.ok(sps.includes('RECODE G_Q1(1 2=21)(3=22)(4 5=23)(ELSE=SYSMIS).'));
+    assert.ok(sps.includes("/MRG=M''Q1 G_Q1"));
+  });
+  test('번호/빈칸 복수응답은 묶음 전체에 같은 값 레이블(/MRG가 첫 변수 레이블을 씀)', () => {
+    const r = TG.computeTables([iv('A2_1_1')], int64Data, {});
+    const s2 = TG.buildSyntax(r, [iv('A2_1_1')], int64Data, {});
+    assert.ok(/\/A2_1_1 A2_1_2 A2_1_3\r?\n\t1 '특허권'\r?\n\t2 '실용신안권'\r?\n\t3 '디자인권'/.test(s2));
+    assert.ok(s2.includes("/MRG=M''A2_1_1 A2_1_2 A2_1_3"));
+    assert.ok(/^WEIGHT OFF\.\r?$/m.test(s2));
+  });
+  test('문자로 된 배너는 RECODE … INTO로 숫자 코드로 바꿈', () => {
+    const reg = gv('data_지역');
+    const r = TG.computeTables([gv('SQ1')], gData, { banners: [{ var: 'data_지역', label: '지역', codes: reg.codes }] });
+    const s3 = TG.buildSyntax(r, [gv('SQ1')], gData, { banners: [{ var: 'data_지역', label: '지역', codes: reg.codes }] });
+    assert.ok(s3.includes("RECODE data_지역 ('경기'=1)('서울'=2) INTO T_data_지역."));
+  });
+  test('인코딩: UTF-8은 BOM+머리말, EUC-KR은 CP949 바이트', () => {
+    const u = TG.encodeSyntax('표', 'utf-8');
+    assert.deepStrictEqual(Array.from(u.slice(0, 3)), [0xef, 0xbb, 0xbf]);
+    const saved = globalThis.cptable;
+    globalThis.cptable = require('xlsx/dist/cpexcel.js');
+    const e = TG.encodeSyntax('표', 'euc-kr');
+    globalThis.cptable = saved;
+    const txt = Buffer.from(e).toString('latin1');
+    assert.ok(txt.startsWith('* Encoding: EUC-KR.'));
+    assert.deepStrictEqual(Array.from(e.slice(-2)), [0xc7, 0xa5]); // '표'
+  });
+}
 
 console.log('표 모양');
 test('보고서형/배너형 격자', () => {
