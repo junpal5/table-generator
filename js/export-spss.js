@@ -59,6 +59,55 @@
     L(opts.weightVar ? `WEIGHT BY ${opts.weightVar}.` : 'WEIGHT OFF.');
     L('');
 
+    // ---------------- 사이트에서 만든 가공 변수 (배너로도 쓸 수 있어 먼저 만듦)
+    const derivedCols = data.order.map((k) => data.columns.get(k)).filter((c) => c.derived);
+    if (derivedCols.length) {
+      L('**.');
+      L('*가공 변수 (설문 통계표 생성기에서 만든 변수).');
+      L('**.');
+      derivedCols.forEach((col) => {
+        const def = col.derived;
+        const v = col.name;
+        const srcCol = data.columns.get(TG.keyOf(def.source));
+        const s = srcCol ? srcCol.name : def.source;
+        // 9999·999999 같은 모름 코드는 빈 값으로 (화면과 같은 기준)
+        const nines = srcCol && !srcCol.raw ? Array.from(new Set(srcCol.values.filter((x) => x != null && TG.NINES.test(String(x))))).sort((a, b) => a - b) : [];
+        const it = items.find((x) => x.derived && x.derived.id === def.id);
+        const label = it ? it.title : def.label || v;
+        if (def.type === 'compute') {
+          const expr = TG.DERIVE_OPS[def.op].sps(s, Number(def.k));
+          if (nines.length) L(`IF (NOT(ANY(${s},${nines.join(',')}))) ${v}=${expr}.`);
+          else L(`COMPUTE ${v}=${expr}.`);
+        } else if (def.type === 'bin') {
+          const bins = TG.parseBins(def.bins).bins;
+          const rng = bins.map((b, i) => {
+            const lo = b.lo == null ? 'LO' : codeNum(b.lo);
+            const hi = b.hi == null ? 'HI' : codeNum(b.hi);
+            return `(${b.lo != null && b.lo === b.hi ? lo : `${lo} THRU ${hi}`}=${i + 1})`;
+          });
+          L(`RECODE ${s} ${nines.map((n) => `(${n}=SYSMIS)`).join('')}${rng.join('')}(ELSE=SYSMIS) INTO ${v}.`);
+        } else if (def.type === 'merge') {
+          const srcCodes = TG.sourceCodes(items, TG.keyOf(def.source));
+          const m = TG.mergeCodes(def, srcCodes);
+          const pairs = m.codes.map((c) => {
+            const from = srcCodes.filter((sc) => m.map.get(sc.code) === c.code);
+            // 문자로 된 원래 변수(예: 지역 "서울")는 글자 그대로 비교
+            const list = from.map((sc) => (srcCol && srcCol.raw ? q(sc.label) : codeNum(sc.code))).join(' ');
+            return `(${list}=${c.code})`;
+          });
+          L(`RECODE ${s} ${pairs.join('')}${srcCol && srcCol.raw ? '' : '(ELSE=SYSMIS)'} INTO ${v}.`);
+        }
+        L(`VARIABLE LABELS ${v} ${q(clip(label, 120))}.`);
+        if (def.type !== 'compute') {
+          L(`VALUE LABELS ${v}`);
+          (it ? it.codes : []).forEach((c) => L(`${codeNum(c.code)} ${q(clip(c.label, 60))}`));
+          L('.');
+          labelled.add(v);
+        }
+        L('');
+      });
+    }
+
     // ---------------- 배너(DEMO) 정의
     const banners = (opts.banners || []).map((b) => {
       const col = data.columns.get(TG.keyOf(b.var));
@@ -109,6 +158,14 @@
 
     used.forEach((it) => {
       const tables = byItem.get(it.id);
+      if (it.kind === 'single' && it.meanOf && data.columns.has(it.meanOf)) {
+        const v = it.vars[0];
+        const aa = dn('AA_', v);
+        D(`*${v}: 구간별 분포와 함께 보는 원래 값(${data.columns.get(it.meanOf).name}) 평균.`);
+        D(`IF (NOT MISSING(${v})) ${aa}=${data.columns.get(it.meanOf).name}.`);
+        D(`VARIABLE LABEL ${aa} '(평균)'.`);
+        D('');
+      }
       if (it.kind === 'numeric') {
         const v = it.vars[0];
         const aa = dn('AA_', v);
@@ -289,6 +346,13 @@
           L('');
           return;
         }
+        if (it.kind === 'single' && it.meanOf && data.columns.has(it.meanOf)) {
+          // 구간 나누기: 구간 분포 + 원래 값 평균 (사내 형식 BY T2+문항+T3+AA_문항)
+          const v = vars[0];
+          const aa = dn('AA_', v);
+          banner(`T2+${v}+T3+${aa}`, [cou, cpc(v), `MEA(${aa}(PAREN7.2)'평균')`], [`/OBS=${aa}`], corner, title);
+          return;
+        }
         if ((it.kind === 'single' || it.kind === 'singleset') && t.kind !== 'summary') {
           const v = it.kind === 'single' ? vars[0] : vars[ti];
           banner(`T2+${v}+T3`, [cou, cpc(v)], [], corner, title);
@@ -380,11 +444,30 @@
     return out.join('\r\n') + '\r\n';
   }
 
+  // EUC-KR(CP949)에 없는 글자는 비슷한 글자로 바꾸고, 그래도 없으면 '?' (그대로 두면 빈 바이트가 들어가 SPSS가 못 읽음)
+  const LOOKALIKE = { '\u2212': '-', '\u2010': '-', '\u2011': '-', '\u2012': '-', '\u2013': '-', '\u2014': '-', '\u2027': '·', '\u2219': '·', '\u22c5': '·', '\u00a0': ' ', '\u2009': ' ', '\u200b': '', '\ufeff': '' };
+  function toCp949Safe(text, cp) {
+    const ok = new Map();
+    let out = '';
+    for (const ch of text) {
+      if (ch.charCodeAt(0) < 128) {
+        out += ch;
+        continue;
+      }
+      if (!ok.has(ch)) {
+        const b = cp.utils.encode(949, ch);
+        ok.set(ch, !(b.length === 1 && (b[0] === 0 || b[0] === 0x3f)) && !Array.from(b).includes(0));
+      }
+      out += ok.get(ch) ? ch : LOOKALIKE[ch] != null ? LOOKALIKE[ch] : '?';
+    }
+    return out;
+  }
+
   // EUC-KR(CP949) 또는 UTF-8로 저장
   function encodeSyntax(text, encoding) {
     const cp = root.cptable;
     if (encoding === 'euc-kr' && cp && cp.utils) {
-      const body = '* Encoding: EUC-KR.\r\n' + text;
+      const body = toCp949Safe('* Encoding: EUC-KR.\r\n' + text, cp);
       return new Uint8Array(cp.utils.encode(949, body));
     }
     const body = '﻿* Encoding: UTF-8.\r\n' + text;

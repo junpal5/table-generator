@@ -793,6 +793,22 @@
       columns.push({ label: '계', fmt: 'pct', isSum: true });
       rows.forEach((r) => r.values.push(r.wn > 0 ? r.values.reduce((a, b) => a + (b || 0), 0) : null));
     }
+    if (item.meanOf && data.columns.has(item.meanOf)) {
+      // 구간 나누기 가공 변수: 구간 분포 옆에 원래 값의 평균
+      const src = data.columns.get(item.meanOf);
+      segs.forEach((seg, s) => {
+        let sw = 0;
+        let sx = 0;
+        for (let i = 0; i < vals.length; i++) {
+          if (!seg.mask[i] || vals[i] == null) continue;
+          sw += w[i];
+          sx += w[i] * src.values[i];
+        }
+        rows[s].values.push(sw > 0 ? sx / sw : null);
+      });
+      columns.push({ label: '평균', fmt: 'mean', isStat: true });
+      notes.push(`평균: 원래 값(${src.name}) 기준`);
+    }
     if (spec) {
       columns.push({ label: spec.topName, fmt: 'pct', isStat: true });
       columns.push({ label: spec.botName, fmt: 'pct', isStat: true });
