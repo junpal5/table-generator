@@ -459,6 +459,23 @@ test('HWPX 압축 파일: mimetype이 맨 앞·무압축', async () => {
   assert.ok(zip.file('Contents/section0.xml') && zip.file('Contents/header.xml') && zip.file('Contents/content.hpf'));
 });
 
+console.log('11점 척도 묶음');
+test('11점 척도(0~10점)는 0~3 / 4~6 / 7~10으로 묶음 (화면·신택스 같은 기준)', () => {
+  const t = TG.computeTables([iv('A6_2')], int64Data, {}).tables[0];
+  const labels = t.columns.map((c) => c.label);
+  assert.ok(labels.includes('긍정(7~10점)') && labels.includes('부정(0~3점)'), labels.join(','));
+  // 값 5, 8, 10, 0 → 긍정(7~10) 2명, 부정(0~3) 1명
+  near(t.rows[0].values[labels.indexOf('긍정(7~10점)')], 50, '긍정');
+  near(t.rows[0].values[labels.indexOf('부정(0~3점)')], 25, '부정');
+  const s = TG.buildSyntax(TG.computeTables([iv('A6_2')], int64Data, {}), [iv('A6_2')], int64Data, {});
+  assert.ok(s.includes('RECODE G_A6_2(0 1 2 3=21)(4 5 6=22)(7 8 9 10=23)(ELSE=SYSMIS).'));
+  assert.ok(s.includes("21 '⊙ 부정(0~3점)'") && s.includes("22 '⊙ 보통(4~6점)'") && s.includes("23 '⊙ 긍정(7~10점)'"));
+});
+test('5점 척도는 그대로 Top2/Bottom2', () => {
+  const t = TG.computeTables([items.find((i) => i.vars[0] === 'Q1')], data, {}).tables[0];
+  assert.ok(t.columns.some((c) => c.label === '긍정(Top2)') && t.columns.some((c) => c.label === '부정(Bottom2)'));
+});
+
 console.log('SPSS 신택스');
 {
   const sOpts = { banners: [{ var: 'SQ1', label: '성별', codes: items.find((i) => i.vars[0] === 'SQ1').codes }], weightVar: 'wt', decimals: 1 };

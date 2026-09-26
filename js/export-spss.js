@@ -145,9 +145,9 @@
           D(`COMPUTE ${g}=${v}.`);
           D(`RECODE ${g}(${bot}=21)${mid.length ? `(${mid.join(' ')}=22)` : ''}(${top}=23)(ELSE=SYSMIS).`);
           D(`VALUE LABEL ${g}`);
-          D(`21 '⊙ 부정(Bottom${spec.k})'`);
-          if (mid.length) D("22 '⊙ 보통'");
-          D(`23 '⊙ 긍정(Top${spec.k})'`);
+          D(`21 '⊙ ${spec.botName}'`);
+          if (mid.length) D(`22 '⊙ 보통${spec.points === 11 ? `(${mid[0]}~${mid[mid.length - 1]}점)` : ''}'`);
+          D(`23 '⊙ ${spec.topName}'`);
           D('.');
           D('');
         });
