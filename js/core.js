@@ -1008,6 +1008,7 @@
     KINDS, SINGLE_KINDS, GROUP_KINDS, SORTABLE_KINDS, canSort,
     str, toNum, keyOf, normType, shortName,
     parseInlineCodes, parseCodebook, prepareData, buildItems, computeTables,
+    scaleSpec, allCodes, NINES,
   });
 
   if (typeof module !== 'undefined' && module.exports) module.exports = TG;

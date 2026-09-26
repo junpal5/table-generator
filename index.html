@@ -110,6 +110,9 @@
           <label>엑셀 시트
             <select id="sheetMode"><option value="one">한 시트에 모든 표</option><option value="each">표마다 시트 따로</option></select>
           </label>
+          <label title="SPSS를 한국어 코드페이지 모드로 쓰면 EUC-KR, 유니코드 모드면 UTF-8">SPSS 신택스 인코딩
+            <select id="spsEncoding"><option value="euc-kr">EUC-KR (기본)</option><option value="utf-8">UTF-8</option></select>
+          </label>
         </div>
       </div>
       <div class="row gap">
@@ -127,6 +130,7 @@
         <button class="btn" id="btnBackToSettings" title="3단계 표 설정으로 이동">표 설정 바꾸기</button>
         <button class="btn primary" id="btnExcel">엑셀로 저장</button>
         <button class="btn primary" id="btnHwpx" title="한글 2014 이상에서 열 수 있는 .hwpx 파일">한글로 저장</button>
+        <button class="btn primary" id="btnSps" title="같은 표를 SPSS TABLES로 뽑는 신택스(.sps)">SPSS 신택스</button>
       </div>
       <div class="result">
         <nav class="toc" aria-label="표 목록">
@@ -159,6 +163,7 @@
   <script src="js/export.js"></script>
   <script src="js/hwpx-template.js"></script>
   <script src="js/export-hwpx.js"></script>
+  <script src="js/export-spss.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

@@ -526,6 +526,11 @@
 
   const saveExcel = () => saveAs('btnExcel', '엑셀로 저장', '엑셀', (base) => TG.downloadExcel(state.result, state.opts, `${base}.xlsx`));
   const saveHwpx = () => saveAs('btnHwpx', '한글로 저장', '한글', (base) => TG.downloadHwpx(state.result, state.opts, `${base}.hwpx`));
+  const saveSps = () =>
+    saveAs('btnSps', 'SPSS 신택스', 'SPSS 신택스', async (base) => {
+      const opts = { ...state.opts, sortedAny: state.items.some((it) => it.include && it.sort) };
+      TG.downloadSyntax(state.result, state.items, state.data, opts, `${base}.sps`, $('spsEncoding').value);
+    });
 
   // ------------------------------------------------------------------
   $('cbFormat').innerHTML += TG.FORMATS.map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
@@ -540,4 +545,5 @@
   $('btnRun').addEventListener('click', run);
   $('btnExcel').addEventListener('click', saveExcel);
   $('btnHwpx').addEventListener('click', saveHwpx);
+  $('btnSps').addEventListener('click', saveSps);
 })();
