@@ -434,13 +434,43 @@ test('HWPX 본문에 표 제목·표·주석이 들어감', () => {
   assert.deepStrictEqual(rows, [5, 5, 6, 5]); // 머리글·전체(구분 2칸 병합) 5칸, 남자 행은 성별 포함 6칸, 여자 행은 성별에 덮여 5칸
   // 열 너비 합 = 본문 폭
   const widths = firstTbl.split('<hp:tr>')[2].match(/cellSz width="(\d+)"/g).map((x) => Number(x.match(/\d+/)[0]));
-  assert.strictEqual(widths.reduce((a, b) => a + b, 0), 42520);
+  assert.strictEqual(widths.reduce((a, b) => a + b, 0), TG.HWPX_PAGE.TEXT_WIDTH);
 });
 test('HWPX: 한 쪽에 표 하나 (표 제목마다 쪽 나눔)', () => {
   const sec = TG.buildHwpxFiles(hwpxRes, hwpxOpts)['Contents/section0.xml'];
   const breaks = sec.match(/<hp:p [^>]*pageBreak="1"[^>]*>(<hp:run [^>]*>)<hp:t>표 \d+\./g) || [];
   assert.strictEqual(breaks.length, hwpxRes.tables.length);
   assert.strictEqual((sec.match(/pageBreak="1"/g) || []).length, hwpxRes.tables.length);
+});
+test('HWPX 표는 글자처럼 취급하지 않고, 쪽 경계에서 셀 단위로 나누며 제목 줄 반복', () => {
+  const sec = TG.buildHwpxFiles(hwpxRes, hwpxOpts)['Contents/section0.xml'];
+  const tbls = sec.match(/<hp:tbl [^>]*>/g);
+  tbls.forEach((t) => assert.ok(/pageBreak="CELL"/.test(t) && /repeatHeader="1"/.test(t) && /textWrap="TOP_AND_BOTTOM"/.test(t)));
+  assert.ok(!/treatAsChar="1"/.test(sec));
+  const head = TG.buildHwpxFiles(hwpxRes, hwpxOpts)['Contents/header.xml'];
+  assert.ok(!head.includes('${'), '틀 문자열이 그대로 남음');
+  assert.strictEqual((head.match(/keepWithNext="1"/g) || []).length, 1); // 표 제목 문단
+  assert.strictEqual((sec.match(/treatAsChar="0"/g) || []).length, hwpxRes.tables.length);
+  // 표 높이 = 줄 높이 합
+  const first = sec.slice(sec.indexOf('<hp:tbl '), sec.indexOf('</hp:tbl>'));
+  const h = Number(/<hp:sz width="\d+" widthRelTo="ABSOLUTE" height="(\d+)"/.exec(first)[1]);
+  const rowH = first.split('<hp:tr>').slice(1).map((r) => Number(/cellSz width="\d+" height="(\d+)"/.exec(r.split('rowSpan="1"')[1] ? r.slice(r.indexOf('rowSpan="1"')) : r)[1]));
+  assert.strictEqual(h, rowH.reduce((a, b) => a + b, 0));
+});
+test('HWPX: 긴 표는 글자를 줄여 한 쪽에 맞춤, 짧은 표는 기본 크기', () => {
+  const ids = { sizes: [8.5, 8, 7.5, 7, 6.5, 6].map((size, i) => ({ size, cell: i * 2, bold: i * 2 + 1 })) };
+  const short = TG.hwpxLayout(hwpxRes.tables[0], hwpxOpts, ids);
+  assert.ok(short.fits && short.z.size === 8.5);
+  // 보기 60개짜리 배너형 표(행이 많음)
+  const big = { no: 9, title: '긴 표', kind: 'single', notes: ['Base: 전체'], columns: Array.from({ length: 60 }, (_, i) => ({ label: '보기 ' + (i + 1), fmt: 'pct' })),
+    rows: [{ group: '전체', label: '전체', isTotal: true, n: 100, wn: 100, values: Array.from({ length: 60 }, () => 1.6) }] };
+  const L = TG.hwpxLayout(big, { ...hwpxOpts, orientation: 'col' }, ids);
+  assert.ok(L.fits, `높이 ${L.total} > ${TG.HWPX_PAGE.TEXT_HEIGHT}`);
+  assert.ok(L.z.size < 8.5);
+  // 너무 길면 가장 작은 글자로 두고 다음 쪽으로 이어짐
+  const huge = { ...big, columns: Array.from({ length: 120 }, (_, i) => ({ label: '보기 ' + (i + 1), fmt: 'pct' })), rows: [{ ...big.rows[0], values: Array.from({ length: 120 }, () => 1) }] };
+  const H = TG.hwpxLayout(huge, { ...hwpxOpts, orientation: 'col' }, ids);
+  assert.ok(!H.fits && H.z.size === 6);
 });
 test('HWPX 서식 목록 개수(itemCnt)가 실제 항목 수와 같음', () => {
   const h = TG.buildHwpxFiles(hwpxRes, hwpxOpts)['Contents/header.xml'];

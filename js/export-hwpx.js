@@ -7,10 +7,18 @@
   'use strict';
   const TG = (root.TG = root.TG || {});
 
-  // HWPUNIT: 1mm ≈ 283.46
-  const TEXT_WIDTH = 42520; // A4 세로, 좌우 여백 30mm 기준 본문 폭(150mm)
-  const ROW_H = 1300;
+  // HWPUNIT: 1mm ≈ 283.46, 1pt = 100
+  // A4 세로(210×297mm). 표가 한 쪽에 최대한 들어가도록 여백을 줄임
+  //   좌우 15mm, 위아래 15mm, 머리말·꼬리말 영역 10mm
+  const PAGE = { width: 59528, height: 84186, left: 4252, right: 4252, top: 4252, bottom: 4252, header: 2835, footer: 2835 };
+  const TEXT_WIDTH = PAGE.width - PAGE.left - PAGE.right; // 본문 폭 180mm
+  const TEXT_HEIGHT = PAGE.height - PAGE.top - PAGE.bottom - PAGE.header - PAGE.footer; // 본문 높이 약 247mm
   const CELL_MARGIN = { left: 283, right: 283, top: 85, bottom: 85 };
+  const LINE = 1.3; // 줄 간격 130%
+  // 표가 길면 글자를 한 단계씩 줄여 한 쪽에 들어가게 함 (가장 작은 크기로도 넘치면 다음 쪽으로 이어짐)
+  const SIZES = [8.5, 8, 7.5, 7, 6.5, 6];
+  const TITLE_SIZE = 10.5;
+  const NOTE_SIZE = 8;
 
   const COLOR = {
     border: '#8C96A5',
@@ -73,12 +81,12 @@
     );
   }
 
-  function paraPrXml(id, align, next) {
+  function paraPrXml(id, align, next, keepWithNext) {
     const margin = `<hh:margin><hc:intent value="0" unit="HWPUNIT"/><hc:left value="0" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="0" unit="HWPUNIT"/><hc:next value="${next || 0}" unit="HWPUNIT"/></hh:margin><hh:lineSpacing type="PERCENT" value="130" unit="HWPUNIT"/>`;
     return (
       `<hh:paraPr id="${id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="0" suppressLineNumbers="0" checked="0" textDir="LTR">` +
       `<hh:align horizontal="${align}" vertical="CENTER"/><hh:heading type="NONE" idRef="0" level="0"/>` +
-      '<hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD" widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/>' +
+      `<hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD" widowOrphan="0" keepWithNext="${keepWithNext ? 1 : 0}" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/>` +
       '<hh:autoSpacing eAsianEng="0" eAsianNum="0"/>' +
       `<hp:switch><hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">${margin}</hp:case><hp:default>${margin}</hp:default></hp:switch>` +
       '<hh:border borderFillIDRef="2" offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0"/></hh:paraPr>'
@@ -91,7 +99,9 @@
     const pp0 = maxId(xml, 'paraPr') + 1;
     const ids = {
       bf: { plain: bf0, head: bf0 + 1, group: bf0 + 2, total: bf0 + 3, stat: bf0 + 4 },
-      cp: { cell: cp0, bold: cp0 + 1, title: cp0 + 2, note: cp0 + 3, cover: cp0 + 4 },
+      cp: { title: cp0, note: cp0 + 1, cover: cp0 + 2 },
+      // 글자 크기별 표 글자 모양: sizes[i] = { cell, bold }
+      sizes: SIZES.map((size, i) => ({ size, cell: cp0 + 3 + i * 2, bold: cp0 + 4 + i * 2 })),
       pp: { center: pp0, right: pp0 + 1, left: pp0 + 2, title: pp0 + 3 },
     };
     xml = addToList(
@@ -104,11 +114,12 @@
     xml = addToList(
       xml,
       'charProperties',
-      charPrXml(ids.cp.cell, { size: 8.5 }) + charPrXml(ids.cp.bold, { size: 8.5, bold: true }) + charPrXml(ids.cp.title, { size: 10.5, bold: true }) +
-        charPrXml(ids.cp.note, { size: 8, color: '#595959' }) + charPrXml(ids.cp.cover, { size: 16, bold: true }),
-      5,
+      charPrXml(ids.cp.title, { size: TITLE_SIZE, bold: true }) + charPrXml(ids.cp.note, { size: NOTE_SIZE, color: '#595959' }) + charPrXml(ids.cp.cover, { size: 16, bold: true }) +
+        ids.sizes.map((z) => charPrXml(z.cell, { size: z.size }) + charPrXml(z.bold, { size: z.size, bold: true })).join(''),
+      3 + ids.sizes.length * 2,
     );
-    xml = addToList(xml, 'paraProperties', paraPrXml(ids.pp.center, 'CENTER') + paraPrXml(ids.pp.right, 'RIGHT') + paraPrXml(ids.pp.left, 'LEFT') + paraPrXml(ids.pp.title, 'LEFT', 600), 4);
+    // 표 제목은 다음 문단(표)과 같은 쪽에 두기
+    xml = addToList(xml, 'paraProperties', paraPrXml(ids.pp.center, 'CENTER') + paraPrXml(ids.pp.right, 'RIGHT') + paraPrXml(ids.pp.left, 'LEFT') + paraPrXml(ids.pp.title, 'LEFT', 400, true), 4);
     return { xml, ids };
   }
 
@@ -144,10 +155,55 @@
     return widths;
   }
 
-  function tableXml(table, opts, ids) {
+  // 글자 폭 대략값(HWPUNIT): 한글·전각 = 글자 크기, 영문·숫자 = 0.55배
+  function textWidth(text, size) {
+    return Array.from(String(text == null ? '' : text)).reduce((a, ch) => a + (/[ㄱ-힝　-ヿ一-鿿■⊙※]/.test(ch) ? 1 : 0.55), 0) * size * 100;
+  }
+
+  // 칸 안 글자가 몇 줄이 되는지 (단어 단위로 줄바꿈되므로 약간 여유를 둠)
+  function lineCount(text, size, width) {
+    const avail = Math.max(width - CELL_MARGIN.left - CELL_MARGIN.right, size * 100);
+    const tw = textWidth(text, size);
+    return Math.max(1, Math.ceil((tw * 1.08) / avail));
+  }
+
+  const rowHeightOf = (size, lines) => Math.round(lines * size * 100 * LINE + CELL_MARGIN.top + CELL_MARGIN.bottom + 60);
+
+  // 표 모양을 글자 크기별로 계산해 한 쪽에 들어가는 가장 큰 크기를 고름
+  function layoutTable(table, opts, ids) {
     const grid = TG.toGrid(table, opts);
     const headRows = (opts.orientation || 'row') === 'row' ? 1 : 2;
     const widths = columnWidths(grid, headRows);
+    const cellText = (c) => (c.t === 'n' ? TG.fmtNumber(c.v, c.fmt, opts) : c.v);
+    const spanWidth = (j, cs) => widths.slice(j, j + cs).reduce((a, b) => a + b, 0);
+    // 제목 한 줄 + 제목 아래 간격 + 주석 줄 수
+    const extra = () => {
+      const titleLines = lineCount(`표 ${table.no}. ${table.title}`, TITLE_SIZE, TEXT_WIDTH);
+      const noteLines = table.notes.reduce((a, n) => a + lineCount('※ ' + n, NOTE_SIZE, TEXT_WIDTH), 0);
+      return titleLines * TITLE_SIZE * 100 * LINE + 400 + noteLines * NOTE_SIZE * 100 * LINE + 600;
+    };
+    let chosen = null;
+    for (const z of ids.sizes) {
+      // 줄마다 가장 많이 줄바꿈되는 칸 기준 높이 (여러 줄에 걸친 칸은 나눠서 계산)
+      const heights = grid.map((line) => {
+        let lines = 1;
+        line.forEach((c, j) => {
+          if (c.merged) return;
+          const rs = c.rs || 1;
+          lines = Math.max(lines, Math.ceil(lineCount(cellText(c), z.size, spanWidth(j, c.cs || 1)) / rs));
+        });
+        return rowHeightOf(z.size, lines);
+      });
+      const total = heights.reduce((a, b) => a + b, 0) + extra();
+      chosen = { z, heights, total, fits: total <= TEXT_HEIGHT };
+      if (chosen.fits) break;
+    }
+    return { grid, headRows, widths, cellText, ...chosen };
+  }
+
+  function tableXml(table, opts, ids) {
+    const L = layoutTable(table, opts, ids);
+    const { grid, headRows, widths, z, heights } = L;
     const nrow = grid.length;
     const ncol = widths.length;
     let rowsXml = '';
@@ -158,35 +214,37 @@
         const cs = c.cs || 1;
         const rs = c.rs || 1;
         const w = widths.slice(j, j + cs).reduce((a, b) => a + b, 0);
+        const h = heights.slice(r, r + rs).reduce((a, b) => a + b, 0);
         let bf = ids.bf.plain;
         if (r < headRows || c.t === 'h') bf = ids.bf.head;
         else if (c.total) bf = ids.bf.total;
         else if (c.t === 'g') bf = ids.bf.group;
         else if (c.stat) bf = ids.bf.stat;
         const bold = r < headRows || c.t === 'h' || c.t === 'g' || c.total;
-        const cp = bold ? ids.cp.bold : ids.cp.cell;
+        const cp = bold ? z.bold : z.cell;
         const pp = c.t === 'n' ? ids.pp.right : c.t === 'h' || r < headRows ? ids.pp.center : ids.pp.left;
-        const text = c.t === 'n' ? TG.fmtNumber(c.v, c.fmt, opts) : c.v;
         tr +=
           `<hp:tc name="" header="${r < headRows ? 1 : 0}" hasMargin="1" protect="0" editable="0" dirty="0" borderFillIDRef="${bf}">` +
           '<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="CENTER" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">' +
-          para(text, pp, cp) +
+          para(L.cellText(c), pp, cp) +
           '</hp:subList>' +
           `<hp:cellAddr colAddr="${j}" rowAddr="${r}"/><hp:cellSpan colSpan="${cs}" rowSpan="${rs}"/>` +
-          `<hp:cellSz width="${w}" height="${ROW_H * rs}"/>` +
+          `<hp:cellSz width="${w}" height="${h}"/>` +
           `<hp:cellMargin left="${CELL_MARGIN.left}" right="${CELL_MARGIN.right}" top="${CELL_MARGIN.top}" bottom="${CELL_MARGIN.bottom}"/></hp:tc>`;
       });
       rowsXml += tr + '</hp:tr>';
     });
+    const height = heights.reduce((a, b) => a + b, 0);
+    // 글자처럼 취급하지 않음(treatAsChar=0): 위아래로 본문과 배치, 쪽 경계에서 셀 단위로 나누고 제목 줄 반복
     const tbl =
       `<hp:tbl id="${nextId()}" zOrder="0" numberingType="TABLE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" pageBreak="CELL" repeatHeader="1" rowCnt="${nrow}" colCnt="${ncol}" cellSpacing="0" borderFillIDRef="${ids.bf.plain}" noAdjust="0">` +
-      `<hp:sz width="${TEXT_WIDTH}" widthRelTo="ABSOLUTE" height="${ROW_H * nrow}" heightRelTo="ABSOLUTE" protect="0"/>` +
-      '<hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>' +
-      '<hp:outMargin left="0" right="0" top="0" bottom="0"/>' +
+      `<hp:sz width="${TEXT_WIDTH}" widthRelTo="ABSOLUTE" height="${height}" heightRelTo="ABSOLUTE" protect="0"/>` +
+      '<hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>' +
+      '<hp:outMargin left="0" right="0" top="0" bottom="283"/>' +
       `<hp:inMargin left="${CELL_MARGIN.left}" right="${CELL_MARGIN.right}" top="${CELL_MARGIN.top}" bottom="${CELL_MARGIN.bottom}"/>` +
       rowsXml +
       '</hp:tbl>';
-    return `<hp:p id="${nextId()}" paraPrIDRef="${ids.pp.left}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${ids.cp.cell}">${tbl}<hp:t/></hp:run></hp:p>`;
+    return `<hp:p id="${nextId()}" paraPrIDRef="${ids.pp.left}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${z.cell}">${tbl}<hp:t/></hp:run></hp:p>`;
   }
 
   function sectionBody(result, opts, ids) {
@@ -218,7 +276,11 @@
     if (!T) throw new Error('한글 문서 틀(hwpx-template.js)이 없습니다.');
     pid = 1000;
     const { xml: header, ids } = buildHeader(T['Contents/header.xml']);
-    const sec = T['Contents/section0.xml'];
+    const sec = T['Contents/section0.xml'].replace(
+      /<hp:margin header="\d+" footer="\d+" gutter="0" left="\d+" right="\d+" top="\d+" bottom="\d+"\/>/,
+      `<hp:margin header="${PAGE.header}" footer="${PAGE.footer}" gutter="0" left="${PAGE.left}" right="${PAGE.right}" top="${PAGE.top}" bottom="${PAGE.bottom}"/>`,
+    );
+    if (!sec.includes(`left="${PAGE.left}" right="${PAGE.right}"`)) throw new Error('한글 틀의 쪽 여백을 찾지 못했습니다.');
     const end = sec.lastIndexOf('</hs:sec>');
     const section = sec.slice(0, end) + sectionBody(result, opts, ids) + sec.slice(end);
     const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
@@ -269,6 +331,6 @@
     }, 1000);
   }
 
-  Object.assign(TG, { buildHwpxFiles, buildHwpx, downloadHwpx });
+  Object.assign(TG, { buildHwpxFiles, buildHwpx, downloadHwpx, hwpxLayout: layoutTable, HWPX_PAGE: { ...PAGE, TEXT_WIDTH, TEXT_HEIGHT } });
   if (typeof module !== 'undefined' && module.exports) module.exports = TG;
 })(typeof window !== 'undefined' ? window : globalThis);
