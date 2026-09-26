@@ -16,6 +16,8 @@
     bannerNames: {},
     result: null,
     opts: null,
+    derived: [], // 가공 변수 설정 (파일을 다시 읽어도 유지)
+    editing: null, // 고치는 중인 가공 변수 id (새로 만들 때는 'new')
   };
 
   // ------------------------------------------------------------------
@@ -155,9 +157,14 @@
       const built = TG.buildItems(state.codebook, state.data);
       warnings.push(...built.warnings);
       state.items = built.items;
+      const dv = TG.applyDerived(state.data, state.items, state.derived);
+      state.items = dv.items;
+      warnings.push(...dv.warnings);
       state.bannerOrder = [];
       state.bannerNames = {};
+      closeDeriveForm();
       renderWarnings(warnings);
+      renderDerived();
       renderItems();
       renderOptions();
       $('step2').classList.remove('hidden');
@@ -273,6 +280,283 @@
       it.include = on;
     });
     renderItems();
+  }
+
+  // ------------------------------------------------------------------
+  // 2단계: 가공 변수 (값 계산 / 구간 나누기 / 보기 묶기)
+  // ------------------------------------------------------------------
+  let deriveSeq = 0;
+  const newDeriveId = () => 'v' + Date.now().toString(36) + (++deriveSeq);
+  const dfType = () => document.querySelector('input[name="dfType"]:checked').value;
+  const itemOfKey = (key) => state.items.find((it) => !it.isGroup && it.keys[0] === key);
+
+  function applyDerivedNow() {
+    const r = TG.applyDerived(state.data, state.items, state.derived);
+    state.items = r.items;
+    renderDerived(r.warnings);
+    renderItems();
+    renderOptions();
+    return r.warnings;
+  }
+
+  function renderDerived(warnings) {
+    const bad = new Set((warnings || []).map((w) => (/^가공 변수 (\S+):/.exec(w) || [])[1]));
+    $('deriveList').innerHTML = state.derived
+      .map((d) => {
+        const made = state.data && state.data.columns.get(TG.keyOf(d.name));
+        const ok = made && made.derived && made.derived.id === d.id;
+        let text;
+        try {
+          text = TG.describeDerived(d);
+        } catch (e) {
+          text = '';
+        }
+        return `<div class="d${ok ? '' : ' bad'}" data-id="${d.id}">
+          <code>${esc(d.name)}</code>
+          <span class="t">${esc(TG.DERIVE_TYPES[d.type])}</span>
+          <span class="x">${esc(text)}${ok ? '' : ' · <b>만들지 못함</b>(원래 변수를 확인하세요)'}${bad.has(d.name) && ok ? ' · 확인 필요' : ''}</span>
+          <span><button class="btn tiny" data-act="edit">고치기</button> <button class="btn tiny" data-act="del">삭제</button></span>
+        </div>`;
+      })
+      .join('');
+    $('btnSaveDerive').disabled = !state.derived.length;
+  }
+
+  // 원래 변수 후보: 값 계산·구간 나누기 → 숫자 변수, 보기 묶기 → 보기가 있는 단일 문항
+  function sourceOptions(type) {
+    const idx = state.derived.findIndex((d) => d.id === state.editing);
+    // 고치는 중인 변수와 그 뒤에 만든 가공 변수는 원래 변수로 쓸 수 없음
+    const blocked = new Set(idx >= 0 ? state.derived.slice(idx).map((d) => TG.keyOf(d.name)) : []);
+    const list = [];
+    state.data.order.forEach((key) => {
+      if (blocked.has(key)) return;
+      const col = state.data.columns.get(key);
+      const it = itemOfKey(key);
+      if (type === 'merge') {
+        if (!it || it.codes.length < 2) return;
+      } else if (col.isText || !col.filled) return;
+      const title = it ? it.title : '';
+      list.push({ key, name: col.name, text: title && title !== col.name ? `${col.name} · ${title.slice(0, 40)}` : col.name, title });
+    });
+    return list;
+  }
+
+  function fillSources(keep) {
+    const type = dfType();
+    const list = sourceOptions(type);
+    const sel = $('dfSource');
+    const prev = keep || sel.value;
+    sel.innerHTML = list.map((o) => `<option value="${esc(o.name)}">${esc(o.text)}</option>`).join('');
+    if (prev && list.some((o) => o.name === prev)) sel.value = prev;
+  }
+
+  function syncDeriveForm() {
+    const type = dfType();
+    document.querySelectorAll('#deriveForm .df-compute').forEach((el) => el.classList.toggle('hidden', type !== 'compute'));
+    document.querySelectorAll('#deriveForm .df-bin').forEach((el) => el.classList.toggle('hidden', type !== 'bin'));
+    document.querySelectorAll('#deriveForm .df-merge').forEach((el) => el.classList.toggle('hidden', type !== 'merge'));
+  }
+
+  function fillMerge(groups) {
+    const codes = TG.sourceCodes(state.items, TG.keyOf($('dfSource').value));
+    $('dfMerge').querySelector('tbody').innerHTML = codes
+      .map((c) => {
+        const v = groups && groups[c.code] != null ? groups[c.code] : c.label;
+        return `<tr data-code="${c.code}"><td>${esc(c.code + '. ' + c.label)}</td><td><input type="text" value="${esc(v)}"></td></tr>`;
+      })
+      .join('');
+  }
+
+  // 이름·제목을 직접 고치지 않았으면 원래 변수에 맞춰 자동으로 채움
+  function autoNames() {
+    const type = dfType();
+    const src = $('dfSource').value;
+    if (!src) return;
+    const it = itemOfKey(TG.keyOf(src));
+    const title = it ? TG.shortName(it.title, src) : src;
+    if (!$('dfName').dataset.touched) $('dfName').value = src.replace(/[^A-Za-z0-9가-힣_]/g, '_') + { compute: '_C', bin: '_G', merge: '_M' }[type];
+    if (!$('dfLabel').dataset.touched) {
+      let label = title;
+      if (type === 'compute' && $('dfK').value.trim() !== '') label = `${title} (${TG.describeDerived({ type, op: $('dfOp').value, k: $('dfK').value, source: src })})`;
+      else if (type === 'bin') label = `${title} (구간)`;
+      else if (type === 'merge') label = `${title} (묶음)`;
+      $('dfLabel').value = label;
+    }
+  }
+
+  function readDeriveForm() {
+    const type = dfType();
+    const def = { id: state.editing === 'new' ? newDeriveId() : state.editing, type, name: $('dfName').value.trim(), label: $('dfLabel').value.trim(), source: $('dfSource').value };
+    if (type === 'compute') {
+      def.op = $('dfOp').value;
+      def.k = $('dfK').value.trim();
+    } else if (type === 'bin') {
+      def.bins = $('dfBins').value.trim();
+    } else {
+      def.groups = {};
+      $('dfMerge').querySelectorAll('tbody tr').forEach((tr) => (def.groups[tr.dataset.code] = tr.querySelector('input').value.trim()));
+    }
+    return def;
+  }
+
+  const fmt = (n) => (n == null ? '-' : (Math.round(n * 100) / 100).toLocaleString('ko-KR'));
+
+  // 입력하는 동안 결과를 미리 보여 줌
+  function previewDerive() {
+    const def = readDeriveForm();
+    const others = state.derived.filter((d) => d.id !== def.id);
+    const err = TG.checkDerived(def, state.data, state.items, others);
+    const box = $('dfPreview');
+    if (err) {
+      box.innerHTML = `<span>${esc(err)}</span>`;
+      return;
+    }
+    const r = TG.previewDerived(def, state.data, state.items);
+    const vals = r.values.filter((v) => v != null);
+    if (def.type === 'compute') {
+      if (!vals.length) {
+        box.textContent = '계산된 값이 없습니다.';
+        return;
+      }
+      const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+      box.innerHTML = `미리보기(가중치 없이): 응답 ${vals.length.toLocaleString('ko-KR')}명 · 평균 ${fmt(mean)} · 최솟값 ${fmt(Math.min(...vals))} · 최댓값 ${fmt(Math.max(...vals))}`;
+      return;
+    }
+    const cnt = new Map(r.codes.map((c) => [c.code, 0]));
+    vals.forEach((v) => cnt.set(v, (cnt.get(v) || 0) + 1));
+    const rows = r.codes.map((c) => `<tr><th>${esc(c.label)}</th><td>${cnt.get(c.code).toLocaleString('ko-KR')}명</td><td>${vals.length ? ((cnt.get(c.code) / vals.length) * 100).toFixed(1) : '-'}%</td></tr>`).join('');
+    const drop = r.dropped ? ` · <b>어느 구간에도 들지 않는 값 ${r.dropped}건</b>(빈 값 처리)` : '';
+    box.innerHTML = `미리보기(가중치 없이): 응답 ${vals.length.toLocaleString('ko-KR')}명${drop}<table>${rows}</table>`;
+  }
+
+  function openDeriveForm(def) {
+    state.editing = def ? def.id : 'new';
+    const type = def ? def.type : 'compute';
+    document.querySelector(`input[name="dfType"][value="${type}"]`).checked = true;
+    syncDeriveForm();
+    fillSources(def ? def.source : null);
+    $('dfOp').value = def && def.op ? def.op : 'k-x';
+    $('dfK').value = def && def.k != null ? def.k : '';
+    $('dfBins').value = def && def.bins ? def.bins : '';
+    $('dfName').value = def ? def.name : '';
+    $('dfLabel').value = def ? state.items.find((it) => it.derived && it.derived.id === def.id)?.title || def.label || '' : '';
+    $('dfName').dataset.touched = def ? '1' : '';
+    $('dfLabel').dataset.touched = def ? '1' : '';
+    fillMerge(def && def.groups);
+    if (!def) autoNames();
+    $('dfOk').textContent = def ? '고치기' : '추가';
+    $('dfError').classList.add('hidden');
+    $('deriveForm').classList.remove('hidden');
+    previewDerive();
+    $('deriveForm').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function closeDeriveForm() {
+    state.editing = null;
+    $('deriveForm').classList.add('hidden');
+  }
+
+  function saveDeriveForm() {
+    const def = readDeriveForm();
+    const others = state.derived.filter((d) => d.id !== def.id);
+    const err = TG.checkDerived(def, state.data, state.items, others);
+    if (err) {
+      $('dfError').textContent = err;
+      $('dfError').classList.remove('hidden');
+      return;
+    }
+    const idx = state.derived.findIndex((d) => d.id === def.id);
+    if (idx >= 0) state.derived[idx] = def;
+    else state.derived.push(def);
+    // 표 제목을 바꿨으면 문항 목록의 제목도 바꿈
+    const it = state.items.find((x) => x.derived && x.derived.id === def.id);
+    if (it) it.derivedLabel = null;
+    closeDeriveForm();
+    applyDerivedNow();
+  }
+
+  function saveDeriveFile() {
+    const body = JSON.stringify({ app: '설문 통계표 생성기', kind: '가공 설정', version: 1, derived: state.derived }, null, 2);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
+    const base = state.files.data ? state.files.data.name.replace(/\.[^.]+$/, '') : '데이터';
+    a.download = `${base}_가공설정.json`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(a.href);
+      a.remove();
+    }, 1000);
+  }
+
+  function loadDeriveFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const obj = JSON.parse(reader.result);
+        const list = Array.isArray(obj) ? obj : obj.derived;
+        if (!Array.isArray(list)) throw new Error('가공 설정 파일이 아닙니다.');
+        const names = new Set(list.map((d) => TG.keyOf(d.name)));
+        state.derived = state.derived.filter((d) => !names.has(TG.keyOf(d.name))).concat(list.map((d) => ({ ...d, id: newDeriveId() })));
+        closeDeriveForm();
+        const w = applyDerivedNow();
+        alert(`가공 변수 ${list.length}개를 불러왔습니다.${w.length ? '\n\n확인 필요:\n' + w.join('\n') : ''}`);
+      } catch (e) {
+        alert('가공 설정을 읽지 못했습니다: ' + e.message);
+      }
+      $('fileDerive').value = '';
+    };
+    reader.readAsText(file);
+  }
+
+  function bindDerive() {
+    $('dfOp').innerHTML = Object.entries(TG.DERIVE_OPS).map(([k, o]) => `<option value="${k}">${esc(o.label)}</option>`).join('');
+    $('btnAddDerive').addEventListener('click', () => openDeriveForm(null));
+    $('dfCancel').addEventListener('click', closeDeriveForm);
+    $('dfOk').addEventListener('click', saveDeriveForm);
+    document.querySelectorAll('input[name="dfType"]').forEach((r) =>
+      r.addEventListener('change', () => {
+        syncDeriveForm();
+        fillSources();
+        fillMerge();
+        autoNames();
+        previewDerive();
+      }),
+    );
+    $('dfSource').addEventListener('change', () => {
+      fillMerge();
+      autoNames();
+      previewDerive();
+    });
+    ['dfName', 'dfLabel'].forEach((id) => $(id).addEventListener('input', () => ($(id).dataset.touched = '1')));
+    ['dfOp', 'dfK', 'dfBins', 'dfName'].forEach((id) =>
+      $(id).addEventListener('input', () => {
+        if (id === 'dfOp' || id === 'dfK') autoNames();
+        previewDerive();
+      }),
+    );
+    $('dfOp').addEventListener('change', () => {
+      autoNames();
+      previewDerive();
+    });
+    $('dfMerge').addEventListener('input', previewDerive);
+    $('deriveList').addEventListener('click', (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      const id = btn.closest('.d').dataset.id;
+      const def = state.derived.find((d) => d.id === id);
+      if (btn.dataset.act === 'edit') openDeriveForm(def);
+      else if (btn.dataset.act === 'del') {
+        if (!confirm(`가공 변수 ${def.name}을(를) 삭제할까요?`)) return;
+        state.derived = state.derived.filter((d) => d.id !== id);
+        if (state.editing === id) closeDeriveForm();
+        applyDerivedNow();
+      }
+    });
+    $('btnSaveDerive').addEventListener('click', saveDeriveFile);
+    $('btnLoadDerive').addEventListener('click', () => $('fileDerive').click());
+    $('fileDerive').addEventListener('change', (e) => loadDeriveFile(e.target.files[0]));
   }
 
   // ------------------------------------------------------------------
@@ -539,6 +823,7 @@
   bindDrop('dropData', 'fileData', 'data');
   bindDrop('dropCb', 'fileCb', 'cb');
   bindItemTable();
+  bindDerive();
   bindOptions();
   $('btnAnalyze').addEventListener('click', analyze);
   $('btnSample').addEventListener('click', loadSamples);

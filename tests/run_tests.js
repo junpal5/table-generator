@@ -4,6 +4,7 @@ const path = require('path');
 const XLSX = require('xlsx');
 const TG = require('../js/core.js');
 require('../js/formats.js');
+require('../js/derive.js');
 require('../js/render.js');
 globalThis.JSZip = require('jszip');
 require('../js/hwpx-template.js');
@@ -476,6 +477,80 @@ test('5점 척도는 그대로 Top2/Bottom2', () => {
   assert.ok(t.columns.some((c) => c.label === '긍정(Top2)') && t.columns.some((c) => c.label === '부정(Bottom2)'));
 });
 
+console.log('가공 변수');
+{
+  // 설립연도(9999 = 모름), 지역(1~4), 성별
+  const rows = [['ID', 'YEAR', 'REG', 'SEX'], [1, 2020, 1, 1], [2, 2015, 2, 2], [3, 2010, 3, 1], [4, 2024, 4, 2], [5, 9999, 1, 1], [6, 2000, null, 2]];
+  const cb = TG.parseCodebook([
+    ['변수명', '문항', '코드', '레이블'],
+    ['YEAR', '설립연도', null, null],
+    ['REG', '지역', 1, '서울'], [null, null, 2, '경기'], [null, null, 3, '부산'], [null, null, 4, '경남'],
+    ['SEX', '성별', 1, '남'], [null, null, 2, '여'],
+  ]);
+  const dData = TG.prepareData(rows);
+  const built = TG.buildItems(cb, dData);
+  const defs = [
+    { id: 'a', type: 'compute', name: 'AGE', label: '업력', source: 'YEAR', op: 'k-x', k: '2026' },
+    { id: 'b', type: 'bin', name: 'AGE_G', label: '업력 구간', source: 'AGE', bins: '~4 / 5~10 / 11~' },
+    { id: 'c', type: 'merge', name: 'AREA', label: '권역', source: 'REG', groups: { 1: '수도권', 2: '수도권', 3: '동남권', 4: '동남권' } },
+  ];
+  const dv = TG.applyDerived(dData, built.items, defs);
+  const di = (name) => dv.items.find((it) => it.vars[0] === name);
+  test('구간 문자열 읽기와 겹침 확인', () => {
+    const p = TG.parseBins('~4 / 5~9 / 10~');
+    assert.deepStrictEqual(p.bins.map((b) => b.label), ['4 이하', '5~9', '10 이상']);
+    assert.ok(TG.parseBins('~5 / 5~9').error);
+    assert.ok(TG.parseBins('9~5').error);
+    assert.ok(TG.parseBins('abc').error);
+  });
+  test('값 계산: 2026 − 연도, 9999(모름)는 빈 값', () => {
+    assert.deepStrictEqual(dData.columns.get(TG.keyOf('AGE')).values, [6, 11, 16, 2, null, 26]);
+    assert.strictEqual(di('AGE').kind, 'numeric');
+    const t = TG.computeTables([di('AGE')], dData, {}).tables[0];
+    near(t.rows[0].values[0], (6 + 11 + 16 + 2 + 26) / 5, '평균');
+  });
+  test('구간 나누기: 가공 변수를 다시 가공, 표에 구간 분포 + 원래 값 평균', () => {
+    assert.deepStrictEqual(dData.columns.get(TG.keyOf('AGE_G')).values, [2, 3, 3, 1, null, 3]);
+    const t = TG.computeTables([di('AGE_G')], dData, {}).tables[0];
+    assert.deepStrictEqual(t.columns.map((c) => c.label), ['4 이하', '5~10', '11 이상', '계', '평균']);
+    near(t.rows[0].values[0], 20, '4 이하');
+    near(t.rows[0].values[4], 12.2, '평균');
+  });
+  test('보기 묶기: 권역으로 묶어 배너로 사용', () => {
+    assert.deepStrictEqual(di('AREA').codes.map((c) => c.label), ['수도권', '동남권']);
+    const t = TG.computeTables([di('AGE')], dData, { banners: [{ var: 'AREA', label: '권역', codes: di('AREA').codes }] }).tables[0];
+    const sudo = t.rows.find((r) => r.label === '수도권');
+    assert.strictEqual(sudo.n, 2); // YEAR 9999는 계산에서 빠짐
+    near(sudo.values[0], 8.5, '수도권 평균');
+  });
+  test('다시 적용해도 변수가 겹치지 않고, 고친 표 제목은 유지', () => {
+    di('AGE').title = '업력(년)';
+    const again = TG.applyDerived(dData, dv.items, defs);
+    assert.strictEqual(again.items.filter((it) => it.derived).length, 3);
+    assert.strictEqual(dData.order.filter((k) => dData.columns.get(k).derived).length, 3);
+    assert.strictEqual(again.items.find((it) => it.vars[0] === 'AGE').title, '업력(년)');
+  });
+  test('잘못된 설정은 만들지 않고 알려 줌', () => {
+    assert.ok(TG.checkDerived({ id: 'x', type: 'compute', name: 'SEX', source: 'YEAR', op: 'k-x', k: '1' }, dData, dv.items, []));
+    assert.ok(TG.checkDerived({ id: 'x', type: 'compute', name: '1AB', source: 'YEAR', op: 'k-x', k: '1' }, dData, dv.items, []));
+    assert.ok(TG.checkDerived({ id: 'x', type: 'compute', name: 'NEWV', source: 'YEAR', op: 'x/k', k: '0' }, dData, dv.items, []));
+    const r = TG.applyDerived(TG.prepareData(rows), TG.buildItems(cb, TG.prepareData(rows)).items, [{ id: 'z', type: 'bin', name: 'Z', source: 'NOPE', bins: '~1' }]);
+    assert.ok(r.warnings.length && !r.items.some((it) => it.derived));
+  });
+  test('SPSS 신택스: 가공 변수 COMPUTE/RECODE와 구간 표의 평균', () => {
+    const items2 = TG.applyDerived(dData, dv.items, defs).items;
+    const use = items2.filter((it) => ['AGE', 'AGE_G'].includes(it.vars[0]));
+    const opts = { banners: [{ var: 'AREA', label: '권역', codes: di('AREA').codes }] };
+    const s = TG.buildSyntax(TG.computeTables(use, dData, opts), items2, dData, opts);
+    assert.ok(s.includes('IF (NOT(ANY(YEAR,9999))) AGE=2026-YEAR.'), 'compute');
+    assert.ok(s.includes('RECODE AGE (LO THRU 4=1)(5 THRU 10=2)(11 THRU HI=3)(ELSE=SYSMIS) INTO AGE_G.'), 'bin');
+    assert.ok(s.includes('RECODE REG (1 2=1)(3 4=2)(ELSE=SYSMIS) INTO AREA.'), 'merge');
+    assert.ok(s.indexOf('INTO AREA.') < s.indexOf('COMPUTE T_AREA=AREA.'), '가공 변수가 배너보다 먼저');
+    assert.ok(s.includes('IF (NOT MISSING(AGE_G)) AA_AGE_G=AGE.'));
+    assert.ok(s.includes('BY T2+AGE_G+T3+AA_AGE_G'));
+  });
+}
+
 console.log('SPSS 신택스');
 {
   const sOpts = { banners: [{ var: 'SQ1', label: '성별', codes: items.find((i) => i.vars[0] === 'SQ1').codes }], weightVar: 'wt', decimals: 1 };
@@ -532,6 +607,13 @@ console.log('SPSS 신택스');
     const txt = Buffer.from(e).toString('latin1');
     assert.ok(txt.startsWith('* Encoding: EUC-KR.'));
     assert.deepStrictEqual(Array.from(e.slice(-2)), [0xc7, 0xa5]); // '표'
+    // EUC-KR에 없는 글자(−, ‧ 등)는 빈 바이트 대신 비슷한 글자로
+    globalThis.cptable = require('xlsx/dist/cpexcel.js');
+    const e2 = TG.encodeSyntax("'2026 − A1_3' '분쟁‧소송' '× ÷ ·'", 'euc-kr');
+    globalThis.cptable = saved;
+    assert.ok(!Array.from(e2).includes(0));
+    const back = new TextDecoder('euc-kr').decode(e2);
+    assert.ok(back.includes("'2026 - A1_3' '분쟁·소송' '× ÷ ·'"), back);
   });
 }
 

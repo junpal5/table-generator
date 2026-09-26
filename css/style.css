@@ -87,6 +87,30 @@ table.grid input[type=text]:hover, table.grid input[type=text]:focus { border-co
 table.grid select.changed { border-color: #e08a00; background: #fff4e0; }
 select { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; background: #fff; }
 
+/* 가공 변수 */
+.derive { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+.derive h3 { margin: 0 0 6px; font-size: 15px; }
+.derive h3 small { font-weight: 400; color: var(--muted); font-size: 12px; }
+.derive-list { margin-bottom: 8px; }
+.derive-list .d { display: grid; grid-template-columns: minmax(80px, 140px) 90px 1fr auto; gap: 8px; align-items: center; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 4px; font-size: 13px; }
+.derive-list .d code { font-size: 12px; font-weight: 600; }
+.derive-list .d .t { color: var(--accent); font-size: 12px; }
+.derive-list .d .x { color: var(--muted); font-size: 12px; }
+.derive-list .d.bad { border-color: var(--err); }
+.derive-form { border: 1px solid var(--accent); background: #fafbff; border-radius: 8px; padding: 12px 14px; margin-top: 6px; }
+.df-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; font-size: 13px; }
+.df-row .df-label { width: 80px; font-weight: 600; flex: none; }
+.df-row input[type=text] { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; }
+.df-row input.wide { min-width: 260px; flex: 1; }
+.df-row .hint, .df-merge-box .hint { color: var(--muted); font-size: 12px; margin: 0 0 4px; }
+.df-merge-box { flex: 1; max-width: 520px; }
+.df-merge-box table.grid { background: #fff; border: 1px solid var(--line); }
+.df-merge-box table.grid input[type=text] { min-width: 160px; border-color: var(--line); }
+.df-preview { font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
+.df-preview table { border-collapse: collapse; margin-top: 4px; }
+.df-preview td, .df-preview th { border: 1px solid var(--line); padding: 2px 8px; text-align: right; font-weight: 400; }
+.df-preview th { background: var(--group); text-align: left; }
+
 .opts { display: grid; grid-template-columns: 1.3fr 1fr; gap: 24px; margin-bottom: 16px; }
 .opt h4 { margin: 14px 0 6px; font-size: 14px; }
 .opt h4:first-child { margin-top: 0; }
